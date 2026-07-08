@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.python-version
+.venv/
+
+# Test/runtime artifacts
+test/output/
+test/engines/
+build/
+dist/
+RAIV.spec
+
+# Local samples and archives.
+sample/*
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
