@@ -1,119 +1,121 @@
 # RAIV for mac
 
-RAIV for mac is an independent macOS / Apple Silicon manga and image archive viewer inspired by [nalltama/RAIV](https://github.com/nalltama/RAIV).
+RAIV for mac は、Apple Silicon Mac向けの画像・漫画ビューアです。本棚へ漫画を登録し、右綴じの見開き表示とReal-CUGANによるAI補正を使って読めます。
 
-This project is not an official RAIV release.
+[nalltama/RAIV](https://github.com/nalltama/RAIV)の思想と配布方式に敬意を払い、macOS向けに独立実装しています。本家RAIVの公式リリースではありません。
 
-## Download
+## すぐに使う
 
-Download the latest build from:
+一般ユーザーにPython、uv、ターミナル操作は不要です。
 
-https://github.com/jydie5/RAIVformac/releases
+1. [Releases](https://github.com/jydie5/RAIVformac/releases)を開きます。
+2. `RAIVformac-v0.2.0-alpha-macos-apple-silicon-standalone.zip`をダウンロードします。
+3. ZIPをダブルクリックして展開します。
+4. `RAIV.app`を`アプリケーション`フォルダへ移動します。
+5. 初回だけ`RAIV.app`をControlキーを押しながらクリックし、`開く`を選びます。
 
-For the first alpha release, download:
+詳しい画面説明と起動できない場合の対処は[INSTALL.md](INSTALL.md)にあります。
 
-```text
-RAIVformac-v0.1.0-alpha-macos-arm64-unsigned.zip
-```
+> 現在のα版は署名・Apple notarization未実施です。初回の通常ダブルクリックはmacOSに止められることがあります。
 
-## Install
+## 最初の一冊を読む
 
-1. Download and unzip the release file.
-2. Move `RAIV.app` to `Applications` or any folder you prefer.
-3. On first launch, right-click `RAIV.app` and choose `Open`.
-4. If macOS shows a security warning, choose `Open`.
+1. RAIVを起動すると本棚が開きます。
+2. ZIP、CBZ、RAR、CBR、7z、CB7、または画像フォルダを本棚へドラッグ＆ドロップします。
+3. 確認画面で`登録`を選びます。
+4. 表紙をダブルクリックすると読書画面が開きます。
+5. 左カーソルキーまたはSpaceで先へ進みます。
 
-This alpha build is unsigned and not notarized, so a normal double-click launch may be blocked by macOS on first launch.
+元の圧縮ファイルは削除しません。本棚には読書用に展開したコピーを保存します。
 
-## Features
+## AI補正と原画比較
 
-- Bookshelf-style library
-- Drag and drop import
-- Local image folders and image archives
-- `zip`, `cbz`, `rar`, `cbr`, `7z`, and `cb7` support
-- Cover grid
-- Right-bound manga spread reading
-- Keyboard navigation
-- One-page spread alignment adjustment
-- Reading progress overlay
-- Optional local AI correction path using a user-provided Real-CUGAN executable
+standalone版には、公式の`realcugan-ncnn-vulkan 20220728 macOS`実行ファイルとモデルを同梱しています。追加セットアップは不要です。
 
-## Local Library
+- 読書中は現在の見開きと前後のページを自動的に補正します。
+- `P`キーで読書設定を開きます。
+- `原画を表示（OFFで補正版）`をONにすると原画、OFFにすると補正版です。
+- `状態: 補正済み`になる前は、切り替えても同じ原画が表示される場合があります。
+- 縦2234px以上の画像は標準設定では補正を省略します。
 
-Imported books are stored under:
+補正処理はApple Silicon GPUをVulkan/Metal経由で使用します。補正を待っている間も原画で読み進められます。
 
-```text
-~/RAIV Library
-```
+## 主な機能
 
-Original archive files are not deleted when importing into RAIV for mac.
+- 表紙を並べる本棚
+- 複数アーカイブのドラッグ＆ドロップ登録
+- ZIP/CBZ、RAR/CBR、7z/CB7、画像フォルダ
+- 右綴じ漫画の表紙単独・見開き表示
+- 巻順の並び替えと次巻への移動
+- 読書位置の保存
+- 全画面表示と透過進捗オーバーレイ
+- Real-CUGANの自動先読み補正
+- 原画と補正版の即時切り替え
+- 本棚からの削除と保存先表示
 
-AI correction cache files are stored under macOS cache folders and can be regenerated.
+## キーボード操作
 
-## AI Correction
+右綴じ漫画の標準設定です。
 
-The public alpha does not bundle Real-CUGAN binaries or model weights.
+| キー | 動作 |
+|---|---|
+| `←` / `Space` | 次の見開き |
+| `→` | 前の見開き |
+| `Shift + ←` | 1ページ先へずらす |
+| `Shift + →` | 1ページ前へずらす |
+| `F` | 全画面 |
+| `P` | 読書設定の表示／非表示 |
+| `?` | ショートカット一覧 |
+| `Esc` | 全画面解除／本棚へ戻る |
 
-Reasons:
+## 保存場所
 
-- third-party redistribution terms must be handled carefully
-- the app should remain usable as a normal viewer
-- users should not receive unexpected executable model files in an unsigned alpha
+- 本棚データ: `~/RAIV Library`
+- AI補正キャッシュ: `~/Library/Caches/RAIV`
+- 本棚データベース: RAIVのApplication Support領域
 
-Advanced users can point the app to a local Real-CUGAN executable:
+元のZIP/RARは取り込み後も元の場所に残ります。本棚から削除するとRAIVが作った展開済みコピーと読書状態を削除します。
 
-```bash
-export RAIV_REALCUGAN_PATH=/path/to/realcugan-ncnn-vulkan
-open /Applications/RAIV.app
-```
+## アンインストール
 
-The app works without this engine; AI correction is optional.
+1. `RAIV.app`をゴミ箱へ移動します。
+2. 本棚も不要なら`~/RAIV Library`を削除します。
+3. 補正キャッシュも不要なら`~/Library/Caches/RAIV`を削除します。
 
-## Keyboard Shortcuts
+元のZIP/RARはRAIVのアンインストールでは削除されません。
 
-For right-bound manga:
+## 現在の制限
 
-- `Left` / `Space`: next spread
-- `Right`: previous spread
-- `Shift + Left`: move forward one page
-- `Shift + Right`: move back one page
-- `F`: fullscreen
-- `P`: settings panel
-- `?`: help
-- `Esc`: exit fullscreen or return to bookshelf
+- Apple Silicon Mac専用です。
+- 署名・Apple notarization未実施です。
+- α版のためUIと設定の互換性が変わる可能性があります。
+- RAR形式によってはmacOS側の展開機能との相性で開けない場合があります。
+- 自動アップデートは未実装です。新しいZIPをReleasesから取得してください。
 
-## Current Status
+## ソースコードから起動する
 
-This is an early alpha for human testing.
-
-Known limitations:
-
-- unsigned and not notarized
-- AI engine path setup is still manual
-- UI is still being refined
-- release builds currently target Apple Silicon macOS
-
-## Acknowledgements
-
-RAIV for mac is inspired by [nalltama/RAIV](https://github.com/nalltama/RAIV), which explores high-quality local image viewing with Real-CUGAN / Real-ESRGAN based upscaling.
-
-This macOS project is an independent implementation and is not an official RAIV release.
-
-## Developer Notes
-
-End users do not need Python, uv, or any development tools.
-
-For developers who want to build from source:
+この項目は開発者向けです。一般ユーザーはstandalone版を利用してください。
 
 ```bash
-uv sync
-uv run --extra app python scripts/build_macos_app.py
+git clone https://github.com/jydie5/RAIVformac.git
+cd RAIVformac
+uv sync --extra gui
+uv run raiv-viewer
 ```
 
-The local app bundle is created at:
+Python不要のローカルアプリを作る場合:
 
-```text
-dist/RAIV.app
+```bash
+uv sync --extra app
+uv run --extra app python scripts/build_macos_app.py --bundle-engine
 ```
 
-Development tests and benchmark fixtures are not included in the public alpha branch until they are replaced with redistributable synthetic sample data.
+ビルド時に公式Real-CUGAN macOS ZIPをGitHub Releasesから取得し、SHA256を検証してから同梱します。ローカルの未知のバイナリは使用しません。
+
+## ライセンス
+
+RAIV for mac本体はMIT Licenseです。同梱するReal-CUGANと依存物の由来、バージョン、ライセンスは[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)に記載しています。standaloneアプリ内にもライセンス全文を収録します。
+
+## English
+
+RAIV for mac is an independent Apple Silicon manga and image viewer inspired by [nalltama/RAIV](https://github.com/nalltama/RAIV). Download the Python-free standalone ZIP from [Releases](https://github.com/jydie5/RAIVformac/releases), unzip it, and open `RAIV.app`. The unsigned alpha may require Control-clicking the app and choosing Open on first launch. See [INSTALL.md](INSTALL.md) for detailed instructions.

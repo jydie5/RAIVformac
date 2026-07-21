@@ -43,6 +43,14 @@ def main() -> None:
         failures.append("engine is bundled without --allow-bundled-engine")
     if audit.get("engine_bundled") and not audit.get("has_realcugan_license"):
         failures.append("engine is bundled but Real-CUGAN license notice is missing")
+    if audit.get("engine_bundled") and not audit.get("engine_hash_verified"):
+        failures.append("bundled Real-CUGAN executable does not match the pinned official SHA256")
+    if audit.get("engine_bundled") and audit.get("model_count", 0) < 19:
+        failures.append("bundled Real-CUGAN model set is incomplete")
+    if audit.get("engine_bundled") and audit.get("missing_engine_licenses"):
+        failures.append("required third-party license notices are missing")
+    if audit.get("missing_runtime_licenses"):
+        failures.append("required Python runtime dependency license notices are missing")
 
     notary = release.get("notary", {})
     if notary.get("skipped"):

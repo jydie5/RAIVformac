@@ -1,29 +1,29 @@
-# RAIV for mac v0.1.0-alpha
+# RAIV for mac v0.2.0-alpha
 
-Initial public alpha for macOS / Apple Silicon.
+一般ユーザーがPythonやターミナル操作なしで試せるstandalone版です。
 
-## Highlights
+## 主な変更
 
-- Bookshelf import for image folders and common comic archive formats
-- Local library extraction under `~/RAIV Library`
-- Cover grid bookshelf with reading progress
-- Right-bound manga spread viewer
-- Keyboard navigation and one-page spread adjustment
-- Reading progress overlay
-- Optional user-provided Real-CUGAN correction path
-- Revolving correction cache around the current spread
-- Single-window bookshelf and reader flow
+- 公式Real-CUGAN 20220728 macOS実行ファイルとモデルを同梱
+- 公式ZIPと実行ファイルをSHA256で検証する再現可能なビルド
+- Real-CUGAN、モデル、ncnn、libwebp、MoltenVK、LLVM OpenMPのライセンス全文をアプリへ収録
+- 原画／補正版チェック切り替え時の表示キャッシュを破棄し、即時再描画
+- 比較チェックの表示を`原画を表示（OFFで補正版）`へ明確化
+- 一般ユーザー向け日本語READMEとインストールガイド
 
-## Distribution Notes
+## ダウンロード
 
-This build is unsigned and not notarized. On first launch, macOS may block a normal double-click launch. Use right-click > Open, then choose Open in the macOS security dialog.
+`RAIVformac-v0.2.0-alpha-macos-apple-silicon-standalone.zip`をダウンロードしてください。Python、uv、Real-CUGANの個別インストールは不要です。
 
-This public alpha does not bundle Real-CUGAN binaries or model weights. AI correction requires a local engine path such as:
+## 初回起動
 
-```bash
-export RAIV_REALCUGAN_PATH=/path/to/realcugan-ncnn-vulkan
-```
+このα版は署名・Apple notarization未実施です。ZIPを展開して`RAIV.app`をアプリケーションへ移動し、初回だけControlキーを押しながらクリックして`開く`を選んでください。
 
-## Acknowledgement
+## 対象環境
 
-RAIV for mac is inspired by [nalltama/RAIV](https://github.com/nalltama/RAIV). This is an independent macOS implementation and is not an official RAIV release.
+- Apple Silicon Mac
+- macOS 13以降を推奨
+
+## ライセンス
+
+RAIV for mac本体はMIT Licenseです。同梱物の由来とライセンスは`THIRD_PARTY_NOTICES.md`およびアプリ内の`Contents/Resources/licenses/`を参照してください。
