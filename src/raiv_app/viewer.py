@@ -508,10 +508,10 @@ class SpreadWindow(QMainWindow):
         layout.addWidget(self.apply_button)
         layout.addWidget(self.help_label("現在表示中の見開きだけ処理して表示を差し替えます。"))
 
-        self.original_check = QCheckBox("原画と比較", controls)
+        self.original_check = QCheckBox("原画を表示（OFFで補正版）", controls)
         self.original_check.stateChanged.connect(lambda _state: self.on_original_compare_changed())
         layout.addWidget(self.original_check)
-        layout.addWidget(self.help_label("今見ているページを原画に切り替え、補正結果との差を確認します。"))
+        layout.addWidget(self.help_label("チェックで原画、解除で補正版へ即時に切り替えて見比べます。"))
 
         self.parameter_status = QLabel("待機中", controls)
         self.parameter_status.setWordWrap(True)
@@ -546,15 +546,32 @@ class SpreadWindow(QMainWindow):
         self.render_spread()
 
     def on_original_compare_changed(self) -> None:
+        visible_indexes = self.visible_page_indexes()
+        self.display_pixmap_cache.clear()
+        self.left.clear()
+        self.right.clear()
         if self.original_check.isChecked():
             self.current_quality_preset = "原画"
+            if visible_indexes and all(self.should_skip_upscale(index) for index in visible_indexes):
+                self.parameter_status.setText("この見開きは高解像度のため補正対象外です。原画と補正版は同じ表示です。")
+            elif self.visible_missing_correction_indexes(visible_indexes):
+                self.parameter_status.setText("原画を表示中です。補正版がまだないページは、チェック解除後に生成します。")
+            else:
+                self.parameter_status.setText("原画を表示中です。チェックを外すと補正版に戻ります。")
         elif self.current_quality_preset == "原画":
             self.current_quality_preset = "標準補正"
-        if not self.original_check.isChecked() and self.visible_missing_correction_indexes():
-            self.parameter_status.setText("この見開きはまだ補正待ちです。現在ページを優先して生成します。")
-            self.request_prefetch()
+        if not self.original_check.isChecked():
+            if visible_indexes and all(self.should_skip_upscale(index) for index in visible_indexes):
+                self.parameter_status.setText("この見開きは高解像度のため補正対象外です。原画を表示します。")
+            elif self.visible_missing_correction_indexes(visible_indexes):
+                self.parameter_status.setText("この見開きはまだ補正待ちです。現在ページを優先して生成します。")
+                self.request_prefetch()
+            else:
+                self.parameter_status.setText("補正版を表示中です。チェックすると原画へ切り替わります。")
         self.update_quality_state()
-        self.render_spread()
+        self.render_spread(high_quality=True)
+        self.left.repaint()
+        self.right.repaint()
 
     def stop_prefetch(self, message: str) -> None:
         self.prefetch_suspended = True
