@@ -174,6 +174,15 @@ def output_cache_source_key(source: Path) -> str:
     return sha1(identity.encode("utf-8")).hexdigest()[:16]
 
 
+def display_cache_path_for(display_path: Path) -> Path | None:
+    try:
+        stat = display_path.stat()
+    except OSError:
+        return None
+    key = sha1(f"{display_path}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")).hexdigest()[:16]
+    return DISPLAY_CACHE_DIR / f"{key}.png"
+
+
 def prefetch_window_indexes(
     current_index: int,
     total_pages: int,
@@ -199,11 +208,14 @@ def missing_processed_indexes(
     return [
         index
         for index in visible_indexes
-        if 0 <= index < len(processed_pages) and index not in skipped and processed_pages[index] is None
+        if 0 <= index < len(processed_pages)
+        and index not in skipped
+        and (processed_pages[index] is None or not processed_pages[index].is_file())
     ]
 
 
 class WorkerSignals(QObject):
+    upscale_page_done = Signal(int, object, int, object)
     upscale_done = Signal(int, object, object, int, object, bool)
 
 
@@ -253,18 +265,21 @@ class SpreadWindow(QMainWindow):
         self.prefetch_running = False
         self.prefetch_suspended = False
         self.processing_generation = 0
+        self.is_closing = False
         self.current_quality_preset = "標準補正"
         self.controls_visible = True
         self.reading_info_visible = False
         self.image_size_cache: dict[int, tuple[int, int]] = {}
         self.display_pixmap_cache: OrderedDict[tuple[str, int, int, int, int, int], QPixmap] = OrderedDict()
-        self.display_pixmap_cache_limit = 32
+        self.display_pixmap_cache_limit = 18
+        self.last_disk_cache_prune_signature: tuple[str, tuple[int, ...]] | None = None
         self.fast_resize_render = False
         self.resize_quality_delay_ms = 180
         self.resize_quality_timer = QTimer(self)
         self.resize_quality_timer.setSingleShot(True)
         self.resize_quality_timer.timeout.connect(self.finish_resize_quality_render)
         self.signals = WorkerSignals()
+        self.signals.upscale_page_done.connect(self.on_upscale_page_done)
         self.signals.upscale_done.connect(self.on_upscale_done)
 
         direction_label = "right-bound" if self.is_right_bound() else "left-bound"
@@ -600,6 +615,7 @@ class SpreadWindow(QMainWindow):
         self.processing_generation += 1
         self.processed_pages = [None] * len(self.pages)
         self.display_pixmap_cache.clear()
+        self.last_disk_cache_prune_signature = None
         if bool(getattr(self, "original_check", None) and self.original_check.isChecked()):
             self.current_quality_preset = "原画"
         elif hasattr(self, "model_combo"):
@@ -637,6 +653,8 @@ class SpreadWindow(QMainWindow):
         if not visible_indexes:
             return "ページなし"
         if any(self.should_skip_upscale(index) for index in visible_indexes):
+            if len(visible_indexes) > 1:
+                return "片側が高解像度のため見開き原画"
             return "高解像度のため補正スキップ"
         missing = self.visible_missing_correction_indexes(visible_indexes)
         if not missing:
@@ -829,6 +847,8 @@ class SpreadWindow(QMainWindow):
         self.spread_status.setText(f"{direction} / 表示順 {order} / {phase}")
 
     def render_spread(self, high_quality: bool | None = None) -> None:
+        if self.is_closing:
+            return
         if not isinstance(high_quality, bool):
             high_quality = not self.fast_resize_render
         self.load_cached_outputs(self.visible_and_prefetch_indexes())
@@ -888,9 +908,19 @@ class SpreadWindow(QMainWindow):
         label.setPixmap(scaled)
 
     def display_path_for_index(self, index: int) -> Path:
-        show_original = bool(getattr(self, "original_check", None) and self.original_check.isChecked())
+        visible_indexes = self.visible_page_indexes()
+        show_original = index in visible_indexes and self.visible_spread_uses_original(visible_indexes)
         display_path = self.pages[index] if show_original else self.processed_pages[index] or self.pages[index]
         return self.display_safe_path(index, display_path)
+
+    def visible_spread_uses_original(self, visible_indexes: list[int] | None = None) -> bool:
+        if bool(getattr(self, "original_check", None) and self.original_check.isChecked()):
+            return True
+        if not visible_indexes:
+            visible_indexes = self.visible_page_indexes()
+        if len(visible_indexes) > 1 and any(self.should_skip_upscale(index) for index in visible_indexes):
+            return True
+        return bool(self.visible_missing_correction_indexes(visible_indexes))
 
     def scaled_pixmap(self, display_path: Path, target, high_quality: bool = True) -> QPixmap:
         if target.width() <= 0 or target.height() <= 0:
@@ -924,7 +954,14 @@ class SpreadWindow(QMainWindow):
     def warm_display_pixmap_cache(self, indexes: list[int]) -> None:
         if not indexes:
             return
-        targets = [self.left.size(), self.right.size()]
+        targets = []
+        seen_sizes: set[tuple[int, int]] = set()
+        for target in (self.left.size(), self.right.size()):
+            dimensions = (target.width(), target.height())
+            if dimensions in seen_sizes:
+                continue
+            seen_sizes.add(dimensions)
+            targets.append(target)
         for index in indexes:
             if index < 0 or index >= len(self.pages):
                 continue
@@ -936,9 +973,9 @@ class SpreadWindow(QMainWindow):
         if display_path == self.pages[index]:
             return display_path
         try:
-            stat = display_path.stat()
-            key = sha1(f"{display_path}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")).hexdigest()[:16]
-            cached_path = DISPLAY_CACHE_DIR / f"{key}.png"
+            cached_path = display_cache_path_for(display_path)
+            if cached_path is None:
+                return display_path
             if cached_path.exists():
                 return cached_path
             DISPLAY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1062,6 +1099,8 @@ class SpreadWindow(QMainWindow):
     def load_cached_outputs(self, indexes: list[int]) -> None:
         if not hasattr(self, "scale_spin") or bool(getattr(self, "original_check", None) and self.original_check.isChecked()):
             return
+        if self.prefetch_running or self.upscale_running:
+            return
         for index in indexes:
             if index < 0 or index >= len(self.pages):
                 continue
@@ -1082,18 +1121,67 @@ class SpreadWindow(QMainWindow):
         return folder / f"{index + 1:04d}_{source.stem}_x{self.scale_spin.value()}.png"
 
     def prune_revolving_correction_cache(self) -> None:
-        if not hasattr(self, "scale_spin"):
+        if (
+            not hasattr(self, "scale_spin")
+            or self.prefetch_running
+            or self.upscale_running
+            or self.is_closing
+        ):
             return
         keep = set(self.visible_and_prefetch_indexes())
-        for index, processed_path in enumerate(list(self.processed_pages)):
+        signature = (self.current_parameter_key(), tuple(sorted(keep)))
+        if signature == self.last_disk_cache_prune_signature:
+            return
+
+        keep_outputs = {
+            self.current_output_path(index)
+            for index in keep
+            if 0 <= index < len(self.pages) and not self.should_skip_upscale(index)
+        }
+        for index, processed_path in enumerate(self.processed_pages):
             if index in keep:
                 continue
-            self.processed_pages[index] = None
-            output_path = self.current_output_path(index)
-            try:
-                if output_path.exists():
+            if processed_path is not None:
+                self.processed_pages[index] = None
+
+        interactive_root = DEFAULT_UPSCALE_DIR / "interactive"
+        if interactive_root.exists():
+            for output_path in interactive_root.rglob("*"):
+                if not output_path.is_file() or output_path in keep_outputs:
+                    continue
+                try:
                     output_path.unlink()
-                output_path.parent.rmdir()
+                except OSError:
+                    pass
+            self.remove_empty_cache_directories(interactive_root)
+
+        keep_display_paths = {
+            cached_path
+            for output_path in keep_outputs
+            if output_path.is_file()
+            for cached_path in [display_cache_path_for(output_path)]
+            if cached_path is not None
+        }
+        if DISPLAY_CACHE_DIR.exists():
+            for cached_path in DISPLAY_CACHE_DIR.iterdir():
+                if not cached_path.is_file() or cached_path in keep_display_paths:
+                    continue
+                try:
+                    cached_path.unlink()
+                except OSError:
+                    pass
+        self.last_disk_cache_prune_signature = signature
+
+    @staticmethod
+    def remove_empty_cache_directories(root: Path) -> None:
+        directories = sorted(
+            (path for path in root.rglob("*") if path.is_dir()),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        )
+        for directory in directories:
+            try:
+                directory.rmdir()
             except OSError:
                 pass
 
@@ -1142,7 +1230,7 @@ class SpreadWindow(QMainWindow):
         ).start()
 
     def request_prefetch(self) -> None:
-        if self.prefetch_suspended:
+        if self.prefetch_suspended or self.is_closing:
             return
         if not self.prefetch_enabled:
             if hasattr(self, "quality_mode_label"):
@@ -1161,6 +1249,8 @@ class SpreadWindow(QMainWindow):
         QTimer.singleShot(0, self.start_prefetch)
 
     def start_prefetch(self) -> None:
+        if self.is_closing:
+            return
         if self.prefetch_running or self.upscale_running or not self.prefetch_enabled:
             return
         if self.prefetch_suspended:
@@ -1213,8 +1303,9 @@ class SpreadWindow(QMainWindow):
     ) -> None:
         started = time.perf_counter()
         errors: list[str] = []
+        completed_output_paths: dict[int, Path] = {}
         for index in output_paths:
-            if is_prefetch and generation != self.processing_generation:
+            if generation != self.processing_generation or self.is_closing:
                 break
             try:
                 result = run_realcugan(
@@ -1228,16 +1319,47 @@ class SpreadWindow(QMainWindow):
                 )
                 if result.returncode != 0 or not result.output_exists:
                     errors.append(f"{self.pages[index].name}: code {result.returncode}")
+                else:
+                    completed_output_paths[index] = output_paths[index]
+                    self.signals.upscale_page_done.emit(
+                        index,
+                        output_paths[index],
+                        generation,
+                        parameter_key,
+                    )
             except Exception as exc:
                 errors.append(f"{self.pages[index].name}: {exc}")
         self.signals.upscale_done.emit(
             round((time.perf_counter() - started) * 1000),
-            output_paths,
+            completed_output_paths,
             errors,
             generation,
             parameter_key,
             is_prefetch,
         )
+
+    def on_upscale_page_done(
+        self,
+        index: int,
+        output_path: Path,
+        generation: int,
+        parameter_key: str,
+    ) -> None:
+        if (
+            self.is_closing
+            or generation != self.processing_generation
+            or parameter_key != self.current_parameter_key()
+        ):
+            return
+        if not output_path.is_file():
+            return
+        self.processed_pages[index] = output_path
+        visible_indexes = self.visible_page_indexes()
+        if index in visible_indexes and not self.visible_missing_correction_indexes(visible_indexes):
+            self.render_spread(high_quality=True)
+        else:
+            self.update_quality_state()
+            self.update_reading_info()
 
     def on_upscale_done(
         self,
@@ -1248,12 +1370,15 @@ class SpreadWindow(QMainWindow):
         parameter_key: str,
         is_prefetch: bool,
     ) -> None:
+        if self.is_closing:
+            return
         stale = generation != self.processing_generation or parameter_key != self.current_parameter_key()
         for index, output_path in output_paths.items():
             if not stale and output_path.exists():
                 self.processed_pages[index] = output_path
         self.upscale_running = False
         self.prefetch_running = False
+        self.last_disk_cache_prune_signature = None
         self.apply_button.setEnabled(True)
         if stale:
             self.parameter_status.setText("古い先読み結果を破棄しました。")
@@ -1277,6 +1402,21 @@ class SpreadWindow(QMainWindow):
         self.render_spread()
 
     def closeEvent(self, event) -> None:
+        if self.is_closing:
+            super().closeEvent(event)
+            return
+        self.is_closing = True
+        self.prefetch_suspended = True
+        self.processing_generation += 1
+        self.resize_quality_timer.stop()
+        application = QApplication.instance()
+        if application is not None:
+            application.removeEventFilter(self)
+        self.left.removeEventFilter(self)
+        self.right.removeEventFilter(self)
+        self.left.clear()
+        self.right.clear()
+        self.display_pixmap_cache.clear()
         self.notify_page_changed()
         if self.cleanup_dir is not None:
             shutil.rmtree(self.cleanup_dir, ignore_errors=True)
