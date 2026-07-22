@@ -306,7 +306,7 @@ class SpreadWindow(QMainWindow):
         self.next_book_banner.setVisible(False)
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(0)
         self.left = QLabel(alignment=Qt.AlignCenter)
         self.right = QLabel(alignment=Qt.AlignCenter)
         self.left.setObjectName("pagePane")
@@ -832,24 +832,21 @@ class SpreadWindow(QMainWindow):
         visible_indexes = self.visible_page_indexes()
         if self.cover_single and self.index == 0:
             if self.is_right_bound():
-                self.render_label(self.left, -1, high_quality=high_quality)
-                self.render_label(self.right, 0, high_quality=high_quality)
+                left_index, right_index = -1, 0
             else:
-                self.render_label(self.left, 0, high_quality=high_quality)
-                self.render_label(self.right, -1, high_quality=high_quality)
+                left_index, right_index = 0, -1
         elif self.index + 1 >= len(self.pages):
             if self.is_right_bound():
-                self.render_label(self.left, -1, high_quality=high_quality)
-                self.render_label(self.right, self.index, high_quality=high_quality)
+                left_index, right_index = -1, self.index
             else:
-                self.render_label(self.left, self.index, high_quality=high_quality)
-                self.render_label(self.right, -1, high_quality=high_quality)
+                left_index, right_index = self.index, -1
         elif self.is_spread_reversed():
-            self.render_label(self.left, self.index + 1, high_quality=high_quality)
-            self.render_label(self.right, self.index, high_quality=high_quality)
+            left_index, right_index = self.index + 1, self.index
         else:
-            self.render_label(self.left, self.index, high_quality=high_quality)
-            self.render_label(self.right, self.index + 1, high_quality=high_quality)
+            left_index, right_index = self.index, self.index + 1
+        self.update_page_pane_alignment(left_index, right_index)
+        self.render_label(self.left, left_index, high_quality=high_quality)
+        self.render_label(self.right, right_index, high_quality=high_quality)
         page_text = page_progress_text(visible_indexes, len(self.pages))
         processed_count = sum(1 for path in self.processed_pages if path is not None)
         file_text = visible_file_names(self.pages, visible_indexes)
@@ -863,6 +860,15 @@ class SpreadWindow(QMainWindow):
             self.prune_revolving_correction_cache()
             self.request_prefetch()
         self.update_next_book_action()
+
+    def update_page_pane_alignment(self, left_index: int, right_index: int) -> None:
+        is_pair = 0 <= left_index < len(self.pages) and 0 <= right_index < len(self.pages)
+        if is_pair:
+            self.left.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.right.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            return
+        self.left.setAlignment(Qt.AlignCenter)
+        self.right.setAlignment(Qt.AlignCenter)
 
     def render_label(self, label: QLabel, index: int, high_quality: bool = True) -> None:
         if index < 0 or index >= len(self.pages):
