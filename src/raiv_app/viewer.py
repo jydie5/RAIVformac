@@ -793,9 +793,12 @@ class SpreadWindow(QMainWindow):
         self.is_fullscreen = not self.is_fullscreen
         fullscreen_target = self.window() if self.embedded else self
         if self.is_fullscreen:
+            self.statusBar().hide()
             fullscreen_target.showFullScreen()
         else:
             fullscreen_target.showNormal()
+            self.statusBar().show()
+        QTimer.singleShot(0, lambda: self.render_spread(high_quality=True))
 
     def toggle_controls(self) -> None:
         self.controls_visible = not self.controls_visible

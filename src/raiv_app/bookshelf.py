@@ -633,8 +633,7 @@ class BookshelfWindow(QMainWindow):
         self.stack.setCurrentWidget(window)
         self.setWindowTitle(f"RAIV - {book.title}")
         if fullscreen:
-            window.is_fullscreen = True
-            self.showFullScreen()
+            window.toggle_fullscreen()
         elif not self.isMaximized():
             screen = self.screen()
             geometry = screen.availableGeometry() if screen is not None else None
