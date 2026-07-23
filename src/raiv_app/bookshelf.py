@@ -17,6 +17,8 @@ from raiv_app.library import (
 )
 from raiv_app.page_provider import open_pages_for_viewer
 from raiv_app.viewer import (
+    DEFAULT_FORWARD_PREFETCH_COUNT,
+    DEFAULT_PREVIOUS_PREFETCH_COUNT,
     PYSIDE_IMPORT_ERROR,
     SpreadWindow,
     collect_processed_pages,
@@ -616,7 +618,8 @@ class BookshelfWindow(QMainWindow):
             spread_order=default_spread_order(reading_direction),
             cover_single=state.cover_single if state else True,
             auto_prefetch=True,
-            prefetch_count=6,
+            prefetch_count=DEFAULT_FORWARD_PREFETCH_COUNT,
+            previous_prefetch_count=DEFAULT_PREVIOUS_PREFETCH_COUNT,
             page_changed_callback=lambda _index: self.save_reading_state(book.id, window),
             bookmark_callback=lambda page_index: self.add_bookmark(book.id, page_index),
             next_book_callback=(lambda: self.open_next_book_from_window(book.id, window)) if next_book else None,

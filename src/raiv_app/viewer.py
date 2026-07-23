@@ -53,7 +53,8 @@ def default_upscale_dir() -> Path:
 
 DEFAULT_UPSCALE_DIR = default_upscale_dir()
 DISPLAY_CACHE_DIR = DEFAULT_UPSCALE_DIR / "display_cache"
-DEFAULT_PREVIOUS_PREFETCH_COUNT = 6
+DEFAULT_FORWARD_PREFETCH_COUNT = 12
+DEFAULT_PREVIOUS_PREFETCH_COUNT = 4
 MODEL_NOISE_OPTIONS = {
     "models-pro": ["3"],
     "models-se": ["-1", "0", "1", "2", "3"],
@@ -230,7 +231,8 @@ class SpreadWindow(QMainWindow):
         spread_order: str = "rtl",
         cover_single: bool = True,
         auto_prefetch: bool = True,
-        prefetch_count: int = 6,
+        prefetch_count: int = DEFAULT_FORWARD_PREFETCH_COUNT,
+        previous_prefetch_count: int = DEFAULT_PREVIOUS_PREFETCH_COUNT,
         upscale_height_threshold: int = 2234,
         page_changed_callback: Callable[[int], None] | None = None,
         bookmark_callback: Callable[[int], None] | None = None,
@@ -251,6 +253,7 @@ class SpreadWindow(QMainWindow):
         self.cleanup_dir = cleanup_dir
         self.auto_prefetch_default = auto_prefetch
         self.prefetch_count_default = prefetch_count
+        self.previous_prefetch_count = previous_prefetch_count
         self.prefetch_enabled = auto_prefetch
         self.upscale_height_threshold_default = upscale_height_threshold
         self.page_changed_callback = page_changed_callback
@@ -1072,6 +1075,7 @@ class SpreadWindow(QMainWindow):
             len(self.pages),
             self.visible_page_indexes(),
             self.prefetch_count_default if self.prefetch_enabled else 0,
+            self.previous_prefetch_count if self.prefetch_enabled else 0,
         )
 
     def visible_missing_correction_indexes(self, visible_indexes: list[int] | None = None) -> list[int]:
@@ -1435,7 +1439,18 @@ def parse_args(argv: list[str]) -> Namespace:
     parser.add_argument("--use-processed", action="store_true", help="auto-load processed benchmark images when available")
     parser.add_argument("--no-auto-prefetch", action="store_true", help="disable interactive correction prefetch")
     parser.add_argument("--no-cover-single", action="store_true", help="start with a normal two-page spread instead of a single cover")
-    parser.add_argument("--prefetch", type=int, default=6, help="number of pages to correct ahead")
+    parser.add_argument(
+        "--prefetch",
+        type=int,
+        default=DEFAULT_FORWARD_PREFETCH_COUNT,
+        help="number of pages to correct ahead",
+    )
+    parser.add_argument(
+        "--previous-prefetch",
+        type=int,
+        default=DEFAULT_PREVIOUS_PREFETCH_COUNT,
+        help="number of previous pages to retain",
+    )
     parser.add_argument("--skip-height", type=int, default=2234, help="skip correction when source height is this value or higher")
     parser.add_argument(
         "--direction",
@@ -1538,6 +1553,7 @@ def main() -> None:
         cover_single=not args.no_cover_single,
         auto_prefetch=not args.no_auto_prefetch,
         prefetch_count=args.prefetch,
+        previous_prefetch_count=args.previous_prefetch,
         upscale_height_threshold=args.skip_height,
     )
     window.show()
