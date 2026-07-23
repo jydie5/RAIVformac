@@ -13,6 +13,12 @@ from pathlib import Path
 from PIL import Image, ImageOps
 from raiv_app.archive_utils import discover_samples, load_sample_pages
 from raiv_app.engine_utils import realcugan_executable, run_realcugan
+from raiv_app.quality_settings import (
+    DEFAULT_QUALITY_SETTINGS_PATH,
+    load_quality_preferences,
+    save_quality_preferences,
+    validate_quality_preset,
+)
 
 try:
     from PySide6.QtCore import QEvent, QObject, QTimer, Qt, Signal
@@ -24,11 +30,13 @@ try:
         QFileDialog,
         QFormLayout,
         QHBoxLayout,
+        QInputDialog,
         QLabel,
         QMainWindow,
         QMessageBox,
         QProgressBar,
         QPushButton,
+        QScrollArea,
         QSpinBox,
         QVBoxLayout,
         QWidget,
@@ -36,7 +44,7 @@ try:
     PYSIDE_IMPORT_ERROR: ImportError | None = None
 except ImportError as exc:
     QEvent = QObject = QTimer = Qt = Signal = QPixmap = QApplication = QCheckBox = QComboBox = QFormLayout = None
-    QHBoxLayout = QLabel = QMessageBox = QProgressBar = QPushButton = QSpinBox = QVBoxLayout = QWidget = QFileDialog = None
+    QHBoxLayout = QInputDialog = QLabel = QMessageBox = QProgressBar = QPushButton = QScrollArea = QSpinBox = QVBoxLayout = QWidget = QFileDialog = None
     QMainWindow = object
     PYSIDE_IMPORT_ERROR = exc
 
@@ -69,25 +77,37 @@ PRESETS = [
         "description": "補正せず最速で表示します。画質比較の基準です。",
     },
     {
-        "name": "標準補正",
+        "name": "自然",
         "mode": "corrected",
         "model": "models-se",
+        "scale": 2,
         "noise": "0",
+        "tile": 0,
+        "threshold": 2234,
+        "tta": False,
         "description": "se/noise 0。線とトーンを自然に整えます。",
     },
     {
-        "name": "補正強め",
+        "name": "クリーニング",
         "mode": "corrected",
         "model": "models-se",
+        "scale": 2,
         "noise": "3",
+        "tile": 0,
+        "threshold": 2234,
+        "tta": False,
         "description": "se/noise 3。古いスキャンの荒れを強く抑えます。",
     },
     {
-        "name": "軽量",
+        "name": "高画質",
         "mode": "corrected",
-        "model": "models-se",
-        "noise": "0",
-        "description": "se/noise 0。軽めの設定で先読み速度を優先します。",
+        "model": "models-pro",
+        "scale": 3,
+        "noise": "3",
+        "tile": 0,
+        "threshold": 2234,
+        "tta": False,
+        "description": "pro/noise 3。処理時間より線と質感の仕上がりを優先します。",
     },
 ]
 
@@ -239,6 +259,7 @@ class SpreadWindow(QMainWindow):
         next_book_callback: Callable[[], None] | None = None,
         next_book_label: str | None = None,
         close_callback: Callable[["SpreadWindow"], None] | None = None,
+        settings_path: Path | None = None,
         embedded: bool = False,
         parent: QWidget | None = None,
     ) -> None:
@@ -261,6 +282,10 @@ class SpreadWindow(QMainWindow):
         self.next_book_callback = next_book_callback
         self.next_book_label = next_book_label
         self.close_callback = close_callback
+        self.settings_path = settings_path or DEFAULT_QUALITY_SETTINGS_PATH
+        self.quality_preferences = load_quality_preferences(self.settings_path)
+        self.custom_presets = list(self.quality_preferences["custom_presets"])
+        self.settings_ui_mode = self.quality_preferences["ui_mode"]
         self.embedded = embedded
         self.index = 0
         self.is_fullscreen = False
@@ -269,7 +294,7 @@ class SpreadWindow(QMainWindow):
         self.prefetch_suspended = False
         self.processing_generation = 0
         self.is_closing = False
-        self.current_quality_preset = "標準補正"
+        self.current_quality_preset = "自然"
         self.controls_visible = True
         self.reading_info_visible = False
         self.image_size_cache: dict[int, tuple[int, int]] = {}
@@ -379,9 +404,14 @@ class SpreadWindow(QMainWindow):
         self.render_spread()
 
     def build_controls(self) -> QWidget:
-        controls = QWidget(self)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFixedWidth(370)
+        scroll.setStyleSheet("QScrollArea { border: 0; background: #181818; }")
+        controls = QWidget(scroll)
         controls.setObjectName("controls")
-        controls.setFixedWidth(350)
+        controls.setMinimumWidth(350)
         layout = QVBoxLayout(controls)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
@@ -397,6 +427,16 @@ class SpreadWindow(QMainWindow):
         header.addWidget(help_button)
         layout.addLayout(header)
 
+        mode_row = QHBoxLayout()
+        mode_label = QLabel("設定モード", controls)
+        mode_row.addWidget(mode_label)
+        self.settings_mode_combo = QComboBox(controls)
+        self.settings_mode_combo.addItem("かんたん", "simple")
+        self.settings_mode_combo.addItem("マニュアル", "manual")
+        self.settings_mode_combo.currentIndexChanged.connect(self.on_settings_mode_changed)
+        mode_row.addWidget(self.settings_mode_combo, 1)
+        layout.addLayout(mode_row)
+
         self.quality_state_card = QWidget(controls)
         self.quality_state_card.setStyleSheet(
             "background: #202020; border: 1px solid #3a3a3a; border-radius: 6px;"
@@ -404,7 +444,7 @@ class SpreadWindow(QMainWindow):
         state_layout = QVBoxLayout(self.quality_state_card)
         state_layout.setContentsMargins(10, 8, 10, 8)
         state_layout.setSpacing(4)
-        self.quality_mode_label = QLabel("画質: 標準補正", self.quality_state_card)
+        self.quality_mode_label = QLabel("画質: 自然", self.quality_state_card)
         self.quality_engine_label = QLabel("エンジン: Real-CUGAN / models-se", self.quality_state_card)
         self.quality_correction_label = QLabel("状態: 原画表示中", self.quality_state_card)
         self.quality_prefetch_label = QLabel("先読み: 待機中", self.quality_state_card)
@@ -432,18 +472,23 @@ class SpreadWindow(QMainWindow):
         layout.addWidget(self.next_book_hint)
         self.update_next_book_action()
 
-        preset_title = QLabel("画質モード", controls)
+        self.simple_panel = QWidget(controls)
+        simple_layout = QVBoxLayout(self.simple_panel)
+        simple_layout.setContentsMargins(0, 0, 0, 0)
+        simple_layout.setSpacing(8)
+        preset_title = QLabel("画質モード", self.simple_panel)
         preset_title.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 4px;")
-        layout.addWidget(preset_title)
+        simple_layout.addWidget(preset_title)
         for preset in PRESETS:
-            button = QPushButton(preset["name"], controls)
+            button = QPushButton(preset["name"], self.simple_panel)
             button.clicked.connect(lambda _checked=False, item=preset: self.apply_preset(item))
-            layout.addWidget(button)
-            layout.addWidget(self.help_label(preset["description"]))
-        self.preset_status = QLabel("標準補正を基準に、必要な時だけ強めや原画へ切り替えます。", controls)
+            simple_layout.addWidget(button)
+            simple_layout.addWidget(self.help_label(preset["description"]))
+        self.preset_status = QLabel("自然を基準に、原稿に合わせてクリーニングや高画質を選びます。", self.simple_panel)
         self.preset_status.setWordWrap(True)
         self.preset_status.setStyleSheet("color: #dddddd; font-size: 13px;")
-        layout.addWidget(self.preset_status)
+        simple_layout.addWidget(self.preset_status)
+        layout.addWidget(self.simple_panel)
 
         spread_title = QLabel("見開き", controls)
         spread_title.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 8px;")
@@ -468,14 +513,27 @@ class SpreadWindow(QMainWindow):
         layout.addWidget(self.spread_status)
         self.update_spread_status()
 
-        self.advanced_check = QCheckBox("詳細パラメータを表示", controls)
-        self.advanced_check.stateChanged.connect(self.toggle_advanced_panel)
-        layout.addWidget(self.advanced_check)
-
         self.advanced_panel = QWidget(controls)
         advanced_layout = QVBoxLayout(self.advanced_panel)
         advanced_layout.setContentsMargins(0, 0, 0, 0)
         advanced_layout.setSpacing(8)
+        custom_title = QLabel("カスタム設定", self.advanced_panel)
+        custom_title.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 4px;")
+        advanced_layout.addWidget(custom_title)
+        self.custom_preset_combo = QComboBox(self.advanced_panel)
+        self.custom_preset_combo.setToolTip("保存済みの画質設定を選びます")
+        advanced_layout.addWidget(self.custom_preset_combo)
+        custom_buttons = QHBoxLayout()
+        load_custom_button = QPushButton("読込", self.advanced_panel)
+        load_custom_button.clicked.connect(self.load_selected_custom_preset)
+        custom_buttons.addWidget(load_custom_button)
+        save_custom_button = QPushButton("保存", self.advanced_panel)
+        save_custom_button.clicked.connect(self.save_current_custom_preset)
+        custom_buttons.addWidget(save_custom_button)
+        delete_custom_button = QPushButton("削除", self.advanced_panel)
+        delete_custom_button.clicked.connect(self.delete_selected_custom_preset)
+        custom_buttons.addWidget(delete_custom_button)
+        advanced_layout.addLayout(custom_buttons)
         form = QFormLayout()
         self.scale_spin = QSpinBox(controls)
         self.scale_spin.setRange(1, 4)
@@ -511,7 +569,7 @@ class SpreadWindow(QMainWindow):
         self.model_combo.setCurrentText("models-se")
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         form.addRow("モデル", self.model_combo)
-        form.addRow("", self.help_label("seは標準・軽量寄り。proは高品質候補ですが現状は実験扱いです。"))
+        form.addRow("", self.help_label("seは自然な補正向け。proは処理時間より仕上がりを優先します。"))
 
         self.tta_check = QCheckBox("TTA", controls)
         self.tta_check.stateChanged.connect(lambda _state: self.on_processing_settings_changed())
@@ -519,7 +577,6 @@ class SpreadWindow(QMainWindow):
         form.addRow("", self.help_label("反転推論で精度を上げます。かなり遅くなります。"))
         advanced_layout.addLayout(form)
         layout.addWidget(self.advanced_panel)
-        self.advanced_panel.setVisible(False)
 
         self.apply_button = QPushButton("現在の見開きを補正", controls)
         self.apply_button.clicked.connect(self.process_current_spread)
@@ -538,30 +595,197 @@ class SpreadWindow(QMainWindow):
         layout.addWidget(self.parameter_status)
         layout.addStretch(1)
         self.on_model_changed(self.model_combo.currentText(), announce=False)
+        self.refresh_custom_preset_combo()
+        self.restore_quality_preferences()
+        self.apply_settings_mode(self.settings_ui_mode, persist=False)
         self.update_quality_state()
-        return controls
+        scroll.setWidget(controls)
+        return scroll
 
-    def toggle_advanced_panel(self) -> None:
-        self.advanced_panel.setVisible(self.advanced_check.isChecked())
+    def on_settings_mode_changed(self) -> None:
+        mode = self.settings_mode_combo.currentData()
+        self.apply_settings_mode(str(mode or "simple"), persist=True)
 
-    def apply_preset(self, preset: dict[str, str]) -> None:
-        self.scale_spin.setValue(2)
-        self.tile_spin.setValue(0)
-        self.model_combo.setCurrentText(preset["model"])
-        self.on_model_changed(preset["model"], announce=False)
-        self.noise_combo.setCurrentText(preset["noise"])
-        self.tta_check.setChecked(False)
-        if hasattr(self, "original_check"):
-            self.original_check.setChecked(preset.get("mode") == "original")
+    def apply_settings_mode(self, mode: str, *, persist: bool) -> None:
+        self.settings_ui_mode = "manual" if mode == "manual" else "simple"
+        index = self.settings_mode_combo.findData(self.settings_ui_mode)
+        if index >= 0 and self.settings_mode_combo.currentIndex() != index:
+            self.settings_mode_combo.blockSignals(True)
+            self.settings_mode_combo.setCurrentIndex(index)
+            self.settings_mode_combo.blockSignals(False)
+        is_manual = self.settings_ui_mode == "manual"
+        self.simple_panel.setVisible(not is_manual)
+        self.advanced_panel.setVisible(is_manual)
+        self.apply_button.setVisible(is_manual)
+        self.parameter_status.setVisible(is_manual)
+        self.quality_engine_label.setVisible(is_manual)
+        self.quality_prefetch_label.setVisible(is_manual)
+        if persist:
+            self.persist_quality_preferences()
+
+    def restore_quality_preferences(self) -> None:
+        selected_name = self.quality_preferences["selected_preset"]
+        preset = self.find_quality_preset(selected_name) or self.find_quality_preset("自然")
+        if preset is not None:
+            self.apply_preset(preset, render=False, persist=False, request_prefetch=False)
+
+    def find_quality_preset(self, name: str) -> dict | None:
+        return next(
+            (preset for preset in [*PRESETS, *self.custom_presets] if preset["name"] == name),
+            None,
+        )
+
+    def apply_preset(
+        self,
+        preset: dict,
+        *,
+        render: bool = True,
+        persist: bool = True,
+        request_prefetch: bool = True,
+    ) -> None:
+        is_original = preset.get("mode") == "original"
+        if not is_original:
+            self.set_engine_controls(preset)
+            self.on_processing_settings_changed()
+        self.original_check.blockSignals(True)
+        self.original_check.setChecked(is_original)
+        self.original_check.blockSignals(False)
         self.current_quality_preset = preset["name"]
-        self.preset_status.setText(preset["description"])
-        if preset.get("mode") == "original":
+        self.preset_status.setText(
+            preset.get("description") or f"{preset['name']}のカスタム設定を使用します。"
+        )
+        if is_original:
             self.parameter_status.setText("原画表示に切り替えました。補正処理は行いません。")
         else:
-            self.parameter_status.setText(f"{preset['name']}に変更しました。現在の見開きを再補正できます。")
-            self.request_prefetch()
+            self.parameter_status.setText(f"{preset['name']}に変更しました。補正はバックグラウンドで行います。")
+        if persist:
+            self.persist_quality_preferences()
         self.update_quality_state()
-        self.render_spread()
+        if render:
+            self.render_spread()
+        if request_prefetch and not is_original:
+            self.request_prefetch()
+
+    def set_engine_controls(self, preset: dict) -> None:
+        model = str(preset.get("model", "models-se"))
+        options = MODEL_NOISE_OPTIONS.get(model, ["0"])
+        controls = (
+            self.scale_spin,
+            self.noise_combo,
+            self.tile_spin,
+            self.threshold_spin,
+            self.model_combo,
+            self.tta_check,
+        )
+        for control in controls:
+            control.blockSignals(True)
+        try:
+            self.model_combo.setCurrentText(model)
+            self.noise_combo.clear()
+            self.noise_combo.addItems(options)
+            self.noise_combo.setCurrentText(str(preset.get("noise", "0")))
+            self.scale_spin.setValue(int(preset.get("scale", 2)))
+            self.tile_spin.setValue(int(preset.get("tile", 0)))
+            self.threshold_spin.setValue(int(preset.get("threshold", self.upscale_height_threshold_default)))
+            self.tta_check.setChecked(bool(preset.get("tta", False)))
+        finally:
+            for control in controls:
+                control.blockSignals(False)
+
+    def current_custom_preset(self, name: str) -> dict | None:
+        return validate_quality_preset(
+            {
+                "name": name,
+                "model": self.model_combo.currentText(),
+                "scale": self.scale_spin.value(),
+                "noise": self.noise_combo.currentText(),
+                "tile": self.tile_spin.value(),
+                "threshold": self.threshold_spin.value(),
+                "tta": self.tta_check.isChecked(),
+                "description": (
+                    f"{self.model_combo.currentText()} / {self.scale_spin.value()}倍 / "
+                    f"noise {self.noise_combo.currentText()}"
+                ),
+            }
+        )
+
+    def refresh_custom_preset_combo(self, selected_name: str | None = None) -> None:
+        self.custom_preset_combo.blockSignals(True)
+        self.custom_preset_combo.clear()
+        self.custom_preset_combo.addItem("保存済み設定を選択", None)
+        for preset in sorted(self.custom_presets, key=lambda item: item["name"].casefold()):
+            self.custom_preset_combo.addItem(preset["name"], preset["name"])
+        if selected_name:
+            index = self.custom_preset_combo.findData(selected_name)
+            if index >= 0:
+                self.custom_preset_combo.setCurrentIndex(index)
+        self.custom_preset_combo.blockSignals(False)
+
+    def load_selected_custom_preset(self) -> None:
+        name = self.custom_preset_combo.currentData()
+        preset = self.find_quality_preset(str(name)) if name else None
+        if preset is None:
+            self.parameter_status.setText("読み込むカスタム設定を選んでください。")
+            return
+        self.apply_preset(preset)
+
+    def save_current_custom_preset(self) -> None:
+        name, accepted = QInputDialog.getText(self, "カスタム設定を保存", "設定名")
+        if not accepted or not name.strip():
+            return
+        preset = self.current_custom_preset(name.strip())
+        if preset is None:
+            QMessageBox.warning(self, "保存できません", "現在のモデルとパラメータの組み合わせは保存できません。")
+            return
+        existing = next((item for item in self.custom_presets if item["name"] == preset["name"]), None)
+        if existing is not None:
+            answer = QMessageBox.question(
+                self,
+                "設定を上書き",
+                f"「{preset['name']}」を現在の値で上書きしますか？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            self.custom_presets.remove(existing)
+        self.custom_presets.append(preset)
+        self.current_quality_preset = preset["name"]
+        self.refresh_custom_preset_combo(preset["name"])
+        self.persist_quality_preferences()
+        self.parameter_status.setText(f"カスタム設定「{preset['name']}」を保存しました。")
+        self.update_quality_state()
+
+    def delete_selected_custom_preset(self) -> None:
+        name = self.custom_preset_combo.currentData()
+        preset = next((item for item in self.custom_presets if item["name"] == name), None)
+        if preset is None:
+            self.parameter_status.setText("削除するカスタム設定を選んでください。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "カスタム設定を削除",
+            f"「{preset['name']}」を削除しますか？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.custom_presets.remove(preset)
+        if self.current_quality_preset == preset["name"]:
+            self.current_quality_preset = "カスタム補正"
+        self.refresh_custom_preset_combo()
+        self.persist_quality_preferences()
+        self.parameter_status.setText(f"カスタム設定「{preset['name']}」を削除しました。")
+        self.update_quality_state()
+
+    def persist_quality_preferences(self) -> None:
+        save_quality_preferences(
+            self.settings_path,
+            ui_mode=self.settings_ui_mode,
+            selected_preset=self.current_quality_preset,
+            custom_presets=self.custom_presets,
+        )
 
     def on_original_compare_changed(self) -> None:
         visible_indexes = self.visible_page_indexes()
@@ -577,7 +801,7 @@ class SpreadWindow(QMainWindow):
             else:
                 self.parameter_status.setText("原画を表示中です。チェックを外すと補正版に戻ります。")
         elif self.current_quality_preset == "原画":
-            self.current_quality_preset = "標準補正"
+            self.current_quality_preset = "自然"
         if not self.original_check.isChecked():
             if visible_indexes and all(self.should_skip_upscale(index) for index in visible_indexes):
                 self.parameter_status.setText("この見開きは高解像度のため補正対象外です。原画を表示します。")
@@ -662,6 +886,8 @@ class SpreadWindow(QMainWindow):
         missing = self.visible_missing_correction_indexes(visible_indexes)
         if not missing:
             return "補正済み"
+        if self.settings_ui_mode == "simple":
+            return "原画表示中・補正準備中"
         if self.upscale_running:
             return "現在の見開きを補正中"
         if self.prefetch_running:
@@ -685,9 +911,12 @@ class SpreadWindow(QMainWindow):
         threshold = self.threshold_spin.value() if hasattr(self, "threshold_spin") else self.upscale_height_threshold_default
         self.quality_mode_label.setText(f"画質: {self.current_quality_mode()}")
         self.quality_engine_label.setText(f"エンジン: Real-CUGAN / {model}")
-        self.quality_correction_label.setText(
-            f"状態: {self.correction_state_text()} / {scale}倍 / noise {self.current_noise_label()}"
-        )
+        if self.settings_ui_mode == "simple":
+            self.quality_correction_label.setText(f"状態: {self.correction_state_text()}")
+        else:
+            self.quality_correction_label.setText(
+                f"状態: {self.correction_state_text()} / {scale}倍 / noise {self.current_noise_label()}"
+            )
         self.quality_prefetch_label.setText(
             f"先読み: {self.prefetch_state_text()} / 縦{threshold}px以上は原画"
         )

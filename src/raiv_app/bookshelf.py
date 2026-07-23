@@ -127,7 +127,7 @@ def reading_state_from_window(book_id: str, window: SpreadWindow) -> ReadingStat
         reading_direction=window.reading_direction,
         cover_single=window.cover_single,
         fit_mode="page",
-        correction_preset="標準",
+        correction_preset=window.current_quality_preset,
     )
 
 
@@ -625,6 +625,7 @@ class BookshelfWindow(QMainWindow):
             next_book_callback=(lambda: self.open_next_book_from_window(book.id, window)) if next_book else None,
             next_book_label=next_book.title if next_book else None,
             close_callback=self.on_reader_closed,
+            settings_path=self.library.paths.settings_path,
             embedded=True,
             parent=self.stack,
         )
