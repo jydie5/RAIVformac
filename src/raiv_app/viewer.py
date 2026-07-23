@@ -5,9 +5,10 @@ import sys
 import threading
 import time
 from argparse import ArgumentParser, Namespace
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable, Sequence
 from hashlib import sha1
+from math import ceil
 from pathlib import Path
 
 from PIL import Image, ImageOps
@@ -63,6 +64,7 @@ DEFAULT_UPSCALE_DIR = default_upscale_dir()
 DISPLAY_CACHE_DIR = DEFAULT_UPSCALE_DIR / "display_cache"
 DEFAULT_FORWARD_PREFETCH_COUNT = 12
 DEFAULT_PREVIOUS_PREFETCH_COUNT = 4
+MAX_FORWARD_PREFETCH_COUNT = 24
 MODEL_NOISE_OPTIONS = {
     "models-pro": ["3"],
     "models-se": ["-1", "0", "1", "2", "3"],
@@ -220,6 +222,26 @@ def prefetch_window_indexes(
     return list(dict.fromkeys(indexes))
 
 
+def adaptive_forward_prefetch_count(
+    intervals_per_page: Sequence[float],
+    *,
+    base_count: int,
+    correction_seconds_per_page: float,
+    maximum_count: int = MAX_FORWARD_PREFETCH_COUNT,
+) -> int:
+    if not intervals_per_page:
+        return min(maximum_count, max(0, base_count))
+    ordered = sorted(intervals_per_page)
+    median_interval = ordered[len(ordered) // 2]
+    pages_per_second = 1.0 / max(0.05, median_interval)
+    lead_seconds = max(12.0, correction_seconds_per_page * 8.0)
+    target = ceil(pages_per_second * lead_seconds) + 4
+    target = max(base_count, min(maximum_count, target))
+    if target % 2:
+        target += 1
+    return min(maximum_count, target)
+
+
 def missing_processed_indexes(
     processed_pages: Sequence[Path | None],
     visible_indexes: Sequence[int],
@@ -295,6 +317,11 @@ class SpreadWindow(QMainWindow):
         self.processing_generation = 0
         self.is_closing = False
         self.current_quality_preset = "自然"
+        self.last_corrected_preset_name = "自然"
+        self.navigation_intervals: deque[float] = deque(maxlen=8)
+        self.last_navigation_at: float | None = None
+        self.correction_seconds_per_page = 1.25
+        self.adaptive_prefetch_count = prefetch_count
         self.controls_visible = True
         self.reading_info_visible = False
         self.image_size_cache: dict[int, tuple[int, int]] = {}
@@ -651,6 +678,8 @@ class SpreadWindow(QMainWindow):
         self.original_check.setChecked(is_original)
         self.original_check.blockSignals(False)
         self.current_quality_preset = preset["name"]
+        if not is_original:
+            self.last_corrected_preset_name = preset["name"]
         self.preset_status.setText(
             preset.get("description") or f"{preset['name']}のカスタム設定を使用します。"
         )
@@ -801,7 +830,7 @@ class SpreadWindow(QMainWindow):
             else:
                 self.parameter_status.setText("原画を表示中です。チェックを外すと補正版に戻ります。")
         elif self.current_quality_preset == "原画":
-            self.current_quality_preset = "自然"
+            self.current_quality_preset = self.last_corrected_preset_name
         if not self.original_check.isChecked():
             if visible_indexes and all(self.should_skip_upscale(index) for index in visible_indexes):
                 self.parameter_status.setText("この見開きは高解像度のため補正対象外です。原画を表示します。")
@@ -847,6 +876,7 @@ class SpreadWindow(QMainWindow):
             self.current_quality_preset = "原画"
         elif hasattr(self, "model_combo"):
             self.current_quality_preset = "カスタム補正"
+            self.last_corrected_preset_name = "カスタム補正"
         if hasattr(self, "parameter_status") and not self.upscale_running and not self.prefetch_running:
             self.parameter_status.setText("設定を変更しました。古い先読み結果は使いません。")
         if hasattr(self, "quality_mode_label"):
@@ -900,8 +930,8 @@ class SpreadWindow(QMainWindow):
         if self.prefetch_suspended:
             return "停止中 / 原画表示継続"
         if self.prefetch_running:
-            return f"生成中 / 自動{self.prefetch_count_default}ページ先"
-        return f"自動 / {self.prefetch_count_default}ページ先"
+            return f"生成中 / 自動{self.adaptive_prefetch_count}ページ先"
+        return f"自動 / {self.adaptive_prefetch_count}ページ先"
 
     def update_quality_state(self) -> None:
         if not hasattr(self, "quality_mode_label"):
@@ -1012,11 +1042,27 @@ class SpreadWindow(QMainWindow):
             next_index = self.index + step
         self.index = max(0, min(len(self.pages) - 1, next_index))
         if self.index != previous_index:
+            self.record_navigation_speed(abs(self.index - previous_index))
             self.invalidate_prefetch_for_navigation()
         self.render_spread()
         self.notify_page_changed()
         self.update_spread_status()
         self.update_next_book_action()
+
+    def record_navigation_speed(self, pages_moved: int) -> None:
+        now = time.monotonic()
+        if self.last_navigation_at is not None and pages_moved > 0:
+            interval_per_page = (now - self.last_navigation_at) / pages_moved
+            if 0.05 <= interval_per_page <= 30:
+                self.navigation_intervals.append(interval_per_page)
+        self.last_navigation_at = now
+        if not self.navigation_intervals:
+            return
+        self.adaptive_prefetch_count = adaptive_forward_prefetch_count(
+            self.navigation_intervals,
+            base_count=self.prefetch_count_default,
+            correction_seconds_per_page=self.correction_seconds_per_page,
+        )
 
     def invalidate_prefetch_for_navigation(self) -> None:
         if not self.prefetch_running:
@@ -1303,7 +1349,7 @@ class SpreadWindow(QMainWindow):
             self.index,
             len(self.pages),
             self.visible_page_indexes(),
-            self.prefetch_count_default if self.prefetch_enabled else 0,
+            self.adaptive_prefetch_count if self.prefetch_enabled else 0,
             self.previous_prefetch_count if self.prefetch_enabled else 0,
         )
 
@@ -1606,6 +1652,11 @@ class SpreadWindow(QMainWindow):
         if self.is_closing:
             return
         stale = generation != self.processing_generation or parameter_key != self.current_parameter_key()
+        if output_paths:
+            measured_seconds = (elapsed_ms / 1000) / len(output_paths)
+            self.correction_seconds_per_page = (
+                self.correction_seconds_per_page * 0.7 + measured_seconds * 0.3
+            )
         for index, output_path in output_paths.items():
             if not stale and output_path.exists():
                 self.processed_pages[index] = output_path
