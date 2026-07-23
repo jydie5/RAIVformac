@@ -760,6 +760,13 @@ class SpreadWindow(QMainWindow):
         name, accepted = QInputDialog.getText(self, "カスタム設定を保存", "設定名")
         if not accepted or not name.strip():
             return
+        if name.strip() in {preset["name"] for preset in PRESETS}:
+            QMessageBox.warning(
+                self,
+                "保存できません",
+                "原画・自然・クリーニング・高画質とは別の名前を付けてください。",
+            )
+            return
         preset = self.current_custom_preset(name.strip())
         if preset is None:
             QMessageBox.warning(self, "保存できません", "現在のモデルとパラメータの組み合わせは保存できません。")
@@ -782,6 +789,8 @@ class SpreadWindow(QMainWindow):
         self.persist_quality_preferences()
         self.parameter_status.setText(f"カスタム設定「{preset['name']}」を保存しました。")
         self.update_quality_state()
+        self.render_spread()
+        self.request_prefetch()
 
     def delete_selected_custom_preset(self) -> None:
         name = self.custom_preset_combo.currentData()
