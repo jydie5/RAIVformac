@@ -14,6 +14,7 @@ from pathlib import Path
 from PIL import Image
 from raiv_app.archive_utils import discover_samples, load_sample_pages
 from raiv_app.engine_utils import realcugan_executable, run_realcugan
+from raiv_app.i18n import initialize_language, tr
 from raiv_app.quality_settings import (
     DEFAULT_QUALITY_SETTINGS_PATH,
     load_quality_preferences,
@@ -149,24 +150,28 @@ def viewer_shortcuts_text(reading_direction: str) -> str:
         one_page_previous = "Shift+← / Shift+↑ / Q"
     return "\n".join(
         [
-            f"{next_keys}: 次へ",
-            f"{previous_keys}: 前へ",
-            f"{one_page_next}: 1ページ進める",
-            f"{one_page_previous}: 1ページ戻す",
-            "F: 全画面表示/解除",
-            "P: 右設定パネル表示/非表示",
-            "B: しおり追加",
-            "画像クリック: ページ情報を表示/非表示",
-            "Esc: 全画面解除 / 本棚へ戻る",
-            "?: このヘルプを表示",
+            tr("{keys}: 次へ", keys=next_keys),
+            tr("{keys}: 前へ", keys=previous_keys),
+            tr("{keys}: 1ページ進める", keys=one_page_next),
+            tr("{keys}: 1ページ戻す", keys=one_page_previous),
+            tr("F: 全画面表示/解除"),
+            tr("P: 右設定パネル表示/非表示"),
+            tr("B: しおり追加"),
+            tr("画像クリック: ページ情報を表示/非表示"),
+            tr("Esc: 全画面解除 / 本棚へ戻る"),
+            tr("?: このヘルプを表示"),
         ]
     )
 
 
 def compact_shortcuts_text(reading_direction: str) -> str:
     if reading_direction == "rtl":
-        return "← 次 / → 前 / Shift+← 1p進む / Shift+→ 1p戻す / P 設定 / ? ヘルプ"
-    return "→ 次 / ← 前 / Shift+→ 1p進む / Shift+← 1p戻す / P 設定 / ? ヘルプ"
+        return tr("← 次 / → 前 / Shift+← 1p進む / Shift+→ 1p戻す / P 設定 / ? ヘルプ")
+    return tr("→ 次 / ← 前 / Shift+→ 1p進む / Shift+← 1p戻す / P 設定 / ? ヘルプ")
+
+
+def display_preset_name(name: str) -> str:
+    return tr(name) if name in {preset["name"] for preset in PRESETS} | {"カスタム補正"} else name
 
 
 def page_progress_text(visible_indexes: list[int], total_pages: int) -> str:
@@ -446,8 +451,8 @@ class SpreadWindow(QMainWindow):
         image_host_layout = QVBoxLayout(image_host)
         image_host_layout.setContentsMargins(0, 0, 0, 0)
         image_host_layout.setSpacing(8)
-        self.next_book_banner = QPushButton("次の巻へ", image_host)
-        self.next_book_banner.setToolTip("読了後に本棚順の次の巻を開きます")
+        self.next_book_banner = QPushButton(tr("次の巻へ"), image_host)
+        self.next_book_banner.setToolTip(tr("読了後に本棚順の次の巻を開きます"))
         self.next_book_banner.clicked.connect(self.open_next_book)
         self.next_book_banner.setStyleSheet(
             "QPushButton {"
@@ -533,22 +538,22 @@ class SpreadWindow(QMainWindow):
         layout.setSpacing(12)
 
         header = QHBoxLayout()
-        title = QLabel("読書設定", controls)
+        title = QLabel(tr("読書設定"), controls)
         title.setStyleSheet("font-weight: bold; font-size: 18px;")
         header.addWidget(title, 1)
         help_button = QPushButton("?", controls)
         help_button.setFixedWidth(34)
-        help_button.setToolTip("ショートカットを表示")
+        help_button.setToolTip(tr("ショートカットを表示"))
         help_button.clicked.connect(self.show_shortcuts_help)
         header.addWidget(help_button)
         layout.addLayout(header)
 
         mode_row = QHBoxLayout()
-        mode_label = QLabel("設定モード", controls)
+        mode_label = QLabel(tr("設定モード"), controls)
         mode_row.addWidget(mode_label)
         self.settings_mode_combo = QComboBox(controls)
-        self.settings_mode_combo.addItem("かんたん", "simple")
-        self.settings_mode_combo.addItem("マニュアル", "manual")
+        self.settings_mode_combo.addItem(tr("かんたん"), "simple")
+        self.settings_mode_combo.addItem(tr("マニュアル"), "manual")
         self.settings_mode_combo.currentIndexChanged.connect(self.on_settings_mode_changed)
         mode_row.addWidget(self.settings_mode_combo, 1)
         layout.addLayout(mode_row)
@@ -560,10 +565,23 @@ class SpreadWindow(QMainWindow):
         state_layout = QVBoxLayout(self.quality_state_card)
         state_layout.setContentsMargins(10, 8, 10, 8)
         state_layout.setSpacing(4)
-        self.quality_mode_label = QLabel("画質: 自然", self.quality_state_card)
-        self.quality_engine_label = QLabel("エンジン: Real-CUGAN / models-se", self.quality_state_card)
-        self.quality_correction_label = QLabel("状態: 原画表示中", self.quality_state_card)
-        self.quality_prefetch_label = QLabel("先読み: 待機中", self.quality_state_card)
+        self.quality_mode_label = QLabel(tr("画質: {mode}", mode=tr("自然")), self.quality_state_card)
+        self.quality_engine_label = QLabel(
+            tr("エンジン: Real-CUGAN / {model}", model="models-se"),
+            self.quality_state_card,
+        )
+        self.quality_correction_label = QLabel(
+            tr("状態: {state}", state=tr("原画表示中")),
+            self.quality_state_card,
+        )
+        self.quality_prefetch_label = QLabel(
+            tr(
+                "先読み: {state} / 縦{threshold}px以上は原画",
+                state=tr("待機中"),
+                threshold=self.upscale_height_threshold_default,
+            ),
+            self.quality_state_card,
+        )
         for label in (
             self.quality_mode_label,
             self.quality_engine_label,
@@ -575,13 +593,13 @@ class SpreadWindow(QMainWindow):
             state_layout.addWidget(label)
         layout.addWidget(self.quality_state_card)
 
-        back_button = QPushButton("本棚へ戻る", controls)
+        back_button = QPushButton(tr("本棚へ戻る"), controls)
         back_button.clicked.connect(self.close)
         layout.addWidget(back_button)
-        layout.addWidget(self.help_label("読書画面を閉じて本棚に戻ります。"))
+        layout.addWidget(self.help_label(tr("読書画面を閉じて本棚に戻ります。")))
 
-        self.next_book_button = QPushButton("次の巻へ", controls)
-        self.next_book_button.setToolTip("読了後に本棚順の次の巻を開きます")
+        self.next_book_button = QPushButton(tr("次の巻へ"), controls)
+        self.next_book_button.setToolTip(tr("読了後に本棚順の次の巻を開きます"))
         self.next_book_button.clicked.connect(self.open_next_book)
         layout.addWidget(self.next_book_button)
         self.next_book_hint = self.help_label("")
@@ -592,21 +610,24 @@ class SpreadWindow(QMainWindow):
         simple_layout = QVBoxLayout(self.simple_panel)
         simple_layout.setContentsMargins(0, 0, 0, 0)
         simple_layout.setSpacing(8)
-        preset_title = QLabel("画質モード", self.simple_panel)
+        preset_title = QLabel(tr("画質モード"), self.simple_panel)
         preset_title.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 4px;")
         simple_layout.addWidget(preset_title)
         for preset in PRESETS:
-            button = QPushButton(preset["name"], self.simple_panel)
+            button = QPushButton(display_preset_name(preset["name"]), self.simple_panel)
             button.clicked.connect(lambda _checked=False, item=preset: self.apply_preset(item))
             simple_layout.addWidget(button)
-            simple_layout.addWidget(self.help_label(preset["description"]))
-        self.preset_status = QLabel("選択中: 自然", self.simple_panel)
+            simple_layout.addWidget(self.help_label(tr(preset["description"])))
+        self.preset_status = QLabel(
+            tr("選択中: {name}", name=display_preset_name("自然")),
+            self.simple_panel,
+        )
         self.preset_status.setWordWrap(True)
         self.preset_status.setStyleSheet("color: #dddddd; font-size: 13px;")
         simple_layout.addWidget(self.preset_status)
         layout.addWidget(self.simple_panel)
 
-        spread_title = QLabel("見開き", controls)
+        spread_title = QLabel(tr("見開き"), controls)
         spread_title.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 8px;")
         layout.addWidget(spread_title)
         spread_buttons = QHBoxLayout()
@@ -616,11 +637,11 @@ class SpreadWindow(QMainWindow):
         shift_forward_button = QPushButton("+1", controls)
         shift_forward_button.clicked.connect(lambda: self.move_by(1))
         spread_buttons.addWidget(shift_forward_button)
-        swap_button = QPushButton("左右入替", controls)
+        swap_button = QPushButton(tr("左右入替"), controls)
         swap_button.clicked.connect(self.swap_spread_order)
         spread_buttons.addWidget(swap_button)
         layout.addLayout(spread_buttons)
-        reset_button = QPushButton("標準見開きに戻す", controls)
+        reset_button = QPushButton(tr("標準見開きに戻す"), controls)
         reset_button.clicked.connect(self.reset_spread_alignment)
         layout.addWidget(reset_button)
         self.spread_status = QLabel("", controls)
@@ -633,20 +654,20 @@ class SpreadWindow(QMainWindow):
         advanced_layout = QVBoxLayout(self.advanced_panel)
         advanced_layout.setContentsMargins(0, 0, 0, 0)
         advanced_layout.setSpacing(8)
-        custom_title = QLabel("カスタム設定", self.advanced_panel)
+        custom_title = QLabel(tr("カスタム設定"), self.advanced_panel)
         custom_title.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 4px;")
         advanced_layout.addWidget(custom_title)
         self.custom_preset_combo = QComboBox(self.advanced_panel)
-        self.custom_preset_combo.setToolTip("保存済みの画質設定を選びます")
+        self.custom_preset_combo.setToolTip(tr("保存済みの画質設定を選びます"))
         advanced_layout.addWidget(self.custom_preset_combo)
         custom_buttons = QHBoxLayout()
-        load_custom_button = QPushButton("読込", self.advanced_panel)
+        load_custom_button = QPushButton(tr("読込"), self.advanced_panel)
         load_custom_button.clicked.connect(self.load_selected_custom_preset)
         custom_buttons.addWidget(load_custom_button)
-        save_custom_button = QPushButton("保存", self.advanced_panel)
+        save_custom_button = QPushButton(tr("保存"), self.advanced_panel)
         save_custom_button.clicked.connect(self.save_current_custom_preset)
         custom_buttons.addWidget(save_custom_button)
-        delete_custom_button = QPushButton("削除", self.advanced_panel)
+        delete_custom_button = QPushButton(tr("削除"), self.advanced_panel)
         delete_custom_button.clicked.connect(self.delete_selected_custom_preset)
         custom_buttons.addWidget(delete_custom_button)
         advanced_layout.addLayout(custom_buttons)
@@ -655,56 +676,57 @@ class SpreadWindow(QMainWindow):
         self.scale_spin.setRange(1, 4)
         self.scale_spin.setValue(2)
         self.scale_spin.valueChanged.connect(lambda _value: self.on_processing_settings_changed())
-        form.addRow("倍率", self.scale_spin)
-        form.addRow("", self.help_label("拡大倍率。漫画確認はまず2倍が扱いやすいです。"))
+        form.addRow(tr("倍率"), self.scale_spin)
+        form.addRow("", self.help_label(tr("拡大倍率。漫画確認はまず2倍が扱いやすいです。")))
 
         self.noise_combo = QComboBox(controls)
         self.noise_combo.addItems(MODEL_NOISE_OPTIONS["models-se"])
         self.noise_combo.setCurrentText("0")
         self.noise_combo.currentTextChanged.connect(lambda _value: self.on_processing_settings_changed())
-        form.addRow("ノイズ除去", self.noise_combo)
-        form.addRow("", self.help_label("0:自然 / 1:標準 / 3:強め。強いほど線が変わりやすいです。"))
+        form.addRow(tr("ノイズ除去"), self.noise_combo)
+        form.addRow("", self.help_label(tr("0:自然 / 1:標準 / 3:強め。強いほど線が変わりやすいです。")))
 
         self.tile_spin = QSpinBox(controls)
         self.tile_spin.setRange(0, 4096)
         self.tile_spin.setSingleStep(32)
         self.tile_spin.setValue(0)
         self.tile_spin.valueChanged.connect(lambda _value: self.on_processing_settings_changed())
-        form.addRow("タイル", self.tile_spin)
-        form.addRow("", self.help_label("処理タイルサイズ。0は自動、重い時だけ調整します。"))
+        form.addRow(tr("タイル"), self.tile_spin)
+        form.addRow("", self.help_label(tr("処理タイルサイズ。0は自動、重い時だけ調整します。")))
 
         self.threshold_spin = QSpinBox(controls)
         self.threshold_spin.setRange(1, 12000)
         self.threshold_spin.setValue(self.upscale_height_threshold_default)
         self.threshold_spin.valueChanged.connect(lambda _value: self.on_processing_settings_changed())
-        form.addRow("補正スキップ縦px", self.threshold_spin)
-        form.addRow("", self.help_label("この縦px以上は補正せず原画表示。今のMacは2234候補です。"))
+        form.addRow(tr("補正スキップ縦px"), self.threshold_spin)
+        form.addRow("", self.help_label(tr("この縦px以上は補正せず原画表示。今のMacは2234候補です。")))
 
         self.model_combo = QComboBox(controls)
         self.model_combo.addItems(["models-pro", "models-se"])
         self.model_combo.setCurrentText("models-se")
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
-        form.addRow("モデル", self.model_combo)
-        form.addRow("", self.help_label("seは自然な補正向け。proは処理時間より仕上がりを優先します。"))
+        form.addRow(tr("モデル"), self.model_combo)
+        form.addRow("", self.help_label(tr("seは自然な補正向け。proは処理時間より仕上がりを優先します。")))
 
         self.tta_check = QCheckBox("TTA", controls)
         self.tta_check.stateChanged.connect(lambda _state: self.on_processing_settings_changed())
         form.addRow("", self.tta_check)
-        form.addRow("", self.help_label("反転推論で精度を上げます。かなり遅くなります。"))
+        form.addRow("", self.help_label(tr("反転推論で精度を上げます。かなり遅くなります。")))
         advanced_layout.addLayout(form)
         layout.addWidget(self.advanced_panel)
 
-        self.apply_button = QPushButton("現在の見開きを補正", controls)
+        self.apply_button = QPushButton(tr("現在の見開きを補正"), controls)
         self.apply_button.clicked.connect(self.process_current_spread)
         layout.addWidget(self.apply_button)
-        layout.addWidget(self.help_label("現在表示中の見開きだけ処理して表示を差し替えます。"))
+        self.apply_help = self.help_label(tr("現在表示中の見開きだけ処理して表示を差し替えます。"))
+        layout.addWidget(self.apply_help)
 
-        self.original_check = QCheckBox("原画を表示（OFFで補正版）", controls)
+        self.original_check = QCheckBox(tr("原画を表示（OFFで補正版）"), controls)
         self.original_check.stateChanged.connect(lambda _state: self.on_original_compare_changed())
         layout.addWidget(self.original_check)
-        layout.addWidget(self.help_label("チェックで原画、解除で補正版へ即時に切り替えて見比べます。"))
+        layout.addWidget(self.help_label(tr("チェックで原画、解除で補正版へ即時に切り替えて見比べます。")))
 
-        self.parameter_status = QLabel("待機中", controls)
+        self.parameter_status = QLabel(tr("待機中"), controls)
         self.parameter_status.setWordWrap(True)
         self.parameter_status.setMinimumHeight(72)
         self.parameter_status.setMaximumHeight(108)
@@ -733,6 +755,7 @@ class SpreadWindow(QMainWindow):
         self.simple_panel.setVisible(not is_manual)
         self.advanced_panel.setVisible(is_manual)
         self.apply_button.setVisible(is_manual)
+        self.apply_help.setVisible(is_manual)
         self.parameter_status.setVisible(is_manual)
         self.quality_engine_label.setVisible(is_manual)
         self.quality_prefetch_label.setVisible(is_manual)
@@ -769,11 +792,17 @@ class SpreadWindow(QMainWindow):
         self.current_quality_preset = preset["name"]
         if not is_original:
             self.last_corrected_preset_name = preset["name"]
-        self.preset_status.setText(f"選択中: {preset['name']}")
+        displayed_name = display_preset_name(preset["name"])
+        self.preset_status.setText(tr("選択中: {name}", name=displayed_name))
         if is_original:
-            self.parameter_status.setText("原画表示に切り替えました。補正処理は行いません。")
+            self.parameter_status.setText(tr("原画表示に切り替えました。補正処理は行いません。"))
         else:
-            self.parameter_status.setText(f"{preset['name']}に変更しました。補正はバックグラウンドで行います。")
+            self.parameter_status.setText(
+                tr(
+                    "{name}に変更しました。補正はバックグラウンドで行います。",
+                    name=displayed_name,
+                )
+            )
         if persist:
             self.persist_quality_preferences()
         self.update_quality_state()
@@ -828,7 +857,7 @@ class SpreadWindow(QMainWindow):
     def refresh_custom_preset_combo(self, selected_name: str | None = None) -> None:
         self.custom_preset_combo.blockSignals(True)
         self.custom_preset_combo.clear()
-        self.custom_preset_combo.addItem("保存済み設定を選択", None)
+        self.custom_preset_combo.addItem(tr("保存済み設定を選択"), None)
         for preset in sorted(self.custom_presets, key=lambda item: item["name"].casefold()):
             self.custom_preset_combo.addItem(preset["name"], preset["name"])
         if selected_name:
@@ -841,31 +870,35 @@ class SpreadWindow(QMainWindow):
         name = self.custom_preset_combo.currentData()
         preset = self.find_quality_preset(str(name)) if name else None
         if preset is None:
-            self.parameter_status.setText("読み込むカスタム設定を選んでください。")
+            self.parameter_status.setText(tr("読み込むカスタム設定を選んでください。"))
             return
         self.apply_preset(preset)
 
     def save_current_custom_preset(self) -> None:
-        name, accepted = QInputDialog.getText(self, "カスタム設定を保存", "設定名")
+        name, accepted = QInputDialog.getText(self, tr("カスタム設定を保存"), tr("設定名"))
         if not accepted or not name.strip():
             return
         if name.strip() in {preset["name"] for preset in PRESETS}:
             QMessageBox.warning(
                 self,
-                "保存できません",
-                "原画・自然・クリーニング・高画質とは別の名前を付けてください。",
+                tr("保存できません"),
+                tr("原画・自然・クリーニング・高画質とは別の名前を付けてください。"),
             )
             return
         preset = self.current_custom_preset(name.strip())
         if preset is None:
-            QMessageBox.warning(self, "保存できません", "現在のモデルとパラメータの組み合わせは保存できません。")
+            QMessageBox.warning(
+                self,
+                tr("保存できません"),
+                tr("現在のモデルとパラメータの組み合わせは保存できません。"),
+            )
             return
         existing = next((item for item in self.custom_presets if item["name"] == preset["name"]), None)
         if existing is not None:
             answer = QMessageBox.question(
                 self,
-                "設定を上書き",
-                f"「{preset['name']}」を現在の値で上書きしますか？",
+                tr("設定を上書き"),
+                tr("「{name}」を現在の値で上書きしますか？", name=preset["name"]),
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -876,7 +909,9 @@ class SpreadWindow(QMainWindow):
         self.current_quality_preset = preset["name"]
         self.refresh_custom_preset_combo(preset["name"])
         self.persist_quality_preferences()
-        self.parameter_status.setText(f"カスタム設定「{preset['name']}」を保存しました。")
+        self.parameter_status.setText(
+            tr("カスタム設定「{name}」を保存しました。", name=preset["name"])
+        )
         self.update_quality_state()
         self.render_spread()
         self.request_prefetch()
@@ -885,12 +920,12 @@ class SpreadWindow(QMainWindow):
         name = self.custom_preset_combo.currentData()
         preset = next((item for item in self.custom_presets if item["name"] == name), None)
         if preset is None:
-            self.parameter_status.setText("削除するカスタム設定を選んでください。")
+            self.parameter_status.setText(tr("削除するカスタム設定を選んでください。"))
             return
         answer = QMessageBox.question(
             self,
-            "カスタム設定を削除",
-            f"「{preset['name']}」を削除しますか？",
+            tr("カスタム設定を削除"),
+            tr("「{name}」を削除しますか？", name=preset["name"]),
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )
@@ -901,7 +936,9 @@ class SpreadWindow(QMainWindow):
             self.current_quality_preset = "カスタム補正"
         self.refresh_custom_preset_combo()
         self.persist_quality_preferences()
-        self.parameter_status.setText(f"カスタム設定「{preset['name']}」を削除しました。")
+        self.parameter_status.setText(
+            tr("カスタム設定「{name}」を削除しました。", name=preset["name"])
+        )
         self.update_quality_state()
 
     def persist_quality_preferences(self) -> None:
@@ -921,21 +958,31 @@ class SpreadWindow(QMainWindow):
         if self.original_check.isChecked():
             self.current_quality_preset = "原画"
             if visible_indexes and all(self.should_skip_upscale(index) for index in visible_indexes):
-                self.parameter_status.setText("この見開きは高解像度のため補正対象外です。原画と補正版は同じ表示です。")
+                self.parameter_status.setText(
+                    tr("この見開きは高解像度のため補正対象外です。原画と補正版は同じ表示です。")
+                )
             elif self.visible_missing_correction_indexes(visible_indexes):
-                self.parameter_status.setText("原画を表示中です。補正版がまだないページは、チェック解除後に生成します。")
+                self.parameter_status.setText(
+                    tr("原画を表示中です。補正版がまだないページは、チェック解除後に生成します。")
+                )
             else:
-                self.parameter_status.setText("原画を表示中です。チェックを外すと補正版に戻ります。")
+                self.parameter_status.setText(tr("原画を表示中です。チェックを外すと補正版に戻ります。"))
         elif self.current_quality_preset == "原画":
             self.current_quality_preset = self.last_corrected_preset_name
         if not self.original_check.isChecked():
             if visible_indexes and all(self.should_skip_upscale(index) for index in visible_indexes):
-                self.parameter_status.setText("この見開きは高解像度のため補正対象外です。原画を表示します。")
+                self.parameter_status.setText(
+                    tr("この見開きは高解像度のため補正対象外です。原画を表示します。")
+                )
             elif self.visible_missing_correction_indexes(visible_indexes):
-                self.parameter_status.setText("この見開きはまだ補正待ちです。現在ページを優先して生成します。")
+                self.parameter_status.setText(
+                    tr("この見開きはまだ補正待ちです。現在ページを優先して生成します。")
+                )
                 self.request_prefetch()
             else:
-                self.parameter_status.setText("補正版を表示中です。チェックすると原画へ切り替わります。")
+                self.parameter_status.setText(
+                    tr("補正版を表示中です。チェックすると原画へ切り替わります。")
+                )
         self.update_quality_state()
         self.render_spread(high_quality=True)
         self.left.repaint()
@@ -944,7 +991,7 @@ class SpreadWindow(QMainWindow):
     def stop_prefetch(self, message: str) -> None:
         self.prefetch_suspended = True
         if hasattr(self, "parameter_status"):
-            self.parameter_status.setText("待機中")
+            self.parameter_status.setText(tr("待機中"))
         self.statusBar().showMessage(message, 6000)
         self.update_quality_state()
 
@@ -960,7 +1007,14 @@ class SpreadWindow(QMainWindow):
         if model == "models-pro" and self.scale_spin.value() < 3:
             self.scale_spin.setValue(3)
         if announce and current_noise and current_noise not in options and hasattr(self, "parameter_status"):
-            self.parameter_status.setText(f"{model} では noise {current_noise} は使えません。{selected_noise} に変更しました。")
+            self.parameter_status.setText(
+                tr(
+                    "{model} では noise {noise} は使えません。{selected} に変更しました。",
+                    model=model,
+                    noise=current_noise,
+                    selected=selected_noise,
+                )
+            )
         if announce:
             self.on_processing_settings_changed()
 
@@ -977,7 +1031,7 @@ class SpreadWindow(QMainWindow):
             self.current_quality_preset = "カスタム補正"
             self.last_corrected_preset_name = "カスタム補正"
         if hasattr(self, "parameter_status") and not self.upscale_running and not self.prefetch_running:
-            self.parameter_status.setText("設定を変更しました。古い先読み結果は使いません。")
+            self.parameter_status.setText(tr("設定を変更しました。古い先読み結果は使いません。"))
         if hasattr(self, "quality_mode_label"):
             self.update_quality_state()
 
@@ -992,45 +1046,45 @@ class SpreadWindow(QMainWindow):
 
     def current_quality_mode(self) -> str:
         if bool(getattr(self, "original_check", None) and self.original_check.isChecked()):
-            return "原画"
-        return self.current_quality_preset
+            return tr("原画")
+        return display_preset_name(self.current_quality_preset)
 
     def current_noise_label(self) -> str:
         if not hasattr(self, "noise_combo"):
-            return "自然"
+            return tr("自然")
         noise = self.noise_combo.currentText()
-        return f"{noise} ({NOISE_LABELS.get(noise, '調整')})"
+        return f"{noise} ({tr(NOISE_LABELS.get(noise, '調整'))})"
 
     def correction_state_text(self, visible_indexes: list[int] | None = None) -> str:
         if bool(getattr(self, "original_check", None) and self.original_check.isChecked()):
-            return "原画表示中"
+            return tr("原画表示中")
         if not visible_indexes:
             visible_indexes = self.visible_page_indexes()
         if not visible_indexes:
-            return "ページなし"
+            return tr("ページなし")
         if any(self.should_skip_upscale(index) for index in visible_indexes):
             if len(visible_indexes) > 1:
-                return "片側が高解像度のため見開き原画"
-            return "高解像度のため補正スキップ"
+                return tr("片側が高解像度のため見開き原画")
+            return tr("高解像度のため補正スキップ")
         missing = self.visible_missing_correction_indexes(visible_indexes)
         if not missing:
-            return "補正済み"
+            return tr("補正済み")
         if self.settings_ui_mode == "simple":
-            return "原画表示中・補正準備中"
+            return tr("原画表示中・補正準備中")
         if self.upscale_running:
-            return "現在の見開きを補正中"
+            return tr("現在の見開きを補正中")
         if self.prefetch_running:
-            return f"先読み補正中 / 未処理 p.{missing[0] + 1}"
-        return f"原画表示中・補正待ち p.{missing[0] + 1}"
+            return tr("先読み補正中 / 未処理 p.{page}", page=missing[0] + 1)
+        return tr("原画表示中・補正待ち p.{page}", page=missing[0] + 1)
 
     def prefetch_state_text(self) -> str:
         if not self.prefetch_enabled:
-            return "オフ / 0ページ"
+            return tr("オフ / 0ページ")
         if self.prefetch_suspended:
-            return "停止中 / 原画表示継続"
+            return tr("停止中 / 原画表示継続")
         if self.prefetch_running:
-            return f"生成中 / 自動{self.adaptive_prefetch_count}ページ先"
-        return f"自動 / {self.adaptive_prefetch_count}ページ先"
+            return tr("生成中 / 自動{count}ページ先", count=self.adaptive_prefetch_count)
+        return tr("自動 / {count}ページ先", count=self.adaptive_prefetch_count)
 
     def update_quality_state(self) -> None:
         if not hasattr(self, "quality_mode_label"):
@@ -1038,16 +1092,23 @@ class SpreadWindow(QMainWindow):
         model = self.model_combo.currentText() if hasattr(self, "model_combo") else "models-se"
         scale = self.scale_spin.value() if hasattr(self, "scale_spin") else 2
         threshold = self.threshold_spin.value() if hasattr(self, "threshold_spin") else self.upscale_height_threshold_default
-        self.quality_mode_label.setText(f"画質: {self.current_quality_mode()}")
-        self.quality_engine_label.setText(f"エンジン: Real-CUGAN / {model}")
+        self.quality_mode_label.setText(tr("画質: {mode}", mode=self.current_quality_mode()))
+        self.quality_engine_label.setText(tr("エンジン: Real-CUGAN / {model}", model=model))
         if self.settings_ui_mode == "simple":
-            self.quality_correction_label.setText(f"状態: {self.correction_state_text()}")
+            self.quality_correction_label.setText(
+                tr("状態: {state}", state=self.correction_state_text())
+            )
         else:
             self.quality_correction_label.setText(
-                f"状態: {self.correction_state_text()} / {scale}倍 / noise {self.current_noise_label()}"
+                tr("状態: {state}", state=self.correction_state_text())
+                + f" / {scale}x / noise {self.current_noise_label()}"
             )
         self.quality_prefetch_label.setText(
-            f"先読み: {self.prefetch_state_text()} / 縦{threshold}px以上は原画"
+            tr(
+                "先読み: {state} / 縦{threshold}px以上は原画",
+                state=self.prefetch_state_text(),
+                threshold=threshold,
+            )
         )
 
     def is_right_bound(self) -> bool:
@@ -1183,7 +1244,11 @@ class SpreadWindow(QMainWindow):
             self.statusBar().showMessage(f"Bookmark added at p.{self.index + 1}    {self.help_text()}")
 
     def show_shortcuts_help(self) -> None:
-        QMessageBox.information(self, "ショートカット", viewer_shortcuts_text(self.reading_direction))
+        QMessageBox.information(
+            self,
+            tr("ショートカット"),
+            viewer_shortcuts_text(self.reading_direction),
+        )
         self.activateWindow()
         self.setFocus(Qt.ActiveWindowFocusReason)
 
@@ -1221,10 +1286,12 @@ class SpreadWindow(QMainWindow):
     def update_spread_status(self) -> None:
         if not hasattr(self, "spread_status"):
             return
-        direction = "右綴じ" if self.is_right_bound() else "左綴じ"
-        order = "左→右" if self.spread_order == "ltr" else "右→左"
-        phase = "表紙単独" if self.cover_single else "通常"
-        self.spread_status.setText(f"{direction} / 表示順 {order} / {phase}")
+        direction = tr("右綴じ") if self.is_right_bound() else tr("左綴じ")
+        order = tr("左→右") if self.spread_order == "ltr" else tr("右→左")
+        phase = tr("表紙単独") if self.cover_single else tr("通常")
+        self.spread_status.setText(
+            tr("{direction} / 表示順 {order} / {phase}", direction=direction, order=order, phase=phase)
+        )
 
     def render_spread(self, high_quality: bool | None = None) -> None:
         if self.is_closing:
@@ -1537,11 +1604,11 @@ class SpreadWindow(QMainWindow):
             if hasattr(self, "next_book_banner"):
                 self.next_book_banner.setVisible(False)
             return
-        label = self.next_book_label or "次の巻"
-        self.next_book_button.setText(f"次の巻へ: {label}")
-        self.next_book_hint.setText("最後まで読んだので、続きの巻を開けます。")
+        label = self.next_book_label or tr("次の巻")
+        self.next_book_button.setText(tr("次の巻へ: {label}", label=label))
+        self.next_book_hint.setText(tr("最後まで読んだので、続きの巻を開けます。"))
         if hasattr(self, "next_book_banner"):
-            self.next_book_banner.setText(f"次の巻へ: {label}")
+            self.next_book_banner.setText(tr("次の巻へ: {label}", label=label))
             self.position_next_book_overlay()
             self.next_book_banner.setVisible(True)
             self.next_book_banner.raise_()
@@ -1654,10 +1721,14 @@ class SpreadWindow(QMainWindow):
         model = self.model_combo.currentText()
         noise_text = self.noise_combo.currentText()
         if noise_text not in MODEL_NOISE_OPTIONS.get(model, []):
-            self.parameter_status.setText(f"{model} では noise {noise_text} は使えません。")
+            self.parameter_status.setText(
+                tr("{model} では noise {noise} は使えません。", model=model, noise=noise_text)
+            )
             return None
         if model == "models-pro" and self.scale_spin.value() < 3:
-            self.parameter_status.setText("models-pro は scale 3 / noise 3 の実験用に制限しています。")
+            self.parameter_status.setText(
+                tr("models-pro は scale 3 / noise 3 の実験用に制限しています。")
+            )
             return None
         return {
             "scale": self.scale_spin.value(),
@@ -1678,7 +1749,7 @@ class SpreadWindow(QMainWindow):
             return
         output_paths = {index: self.current_output_path(index) for index in indexes if not self.should_skip_upscale(index)}
         if not output_paths:
-            self.parameter_status.setText("現在見開きは閾値以上のため原画表示です。")
+            self.parameter_status.setText(tr("現在見開きは閾値以上のため原画表示です。"))
             self.update_quality_state()
             return
         self.upscale_running = True
@@ -1686,7 +1757,7 @@ class SpreadWindow(QMainWindow):
         self.apply_button.setEnabled(False)
         generation = self.processing_generation
         parameter_key = self.current_parameter_key()
-        self.parameter_status.setText("現在の見開きを補正中...")
+        self.parameter_status.setText(tr("現在の見開きを補正中..."))
         self.update_quality_state()
         self.update_reading_info()
         threading.Thread(
@@ -1706,11 +1777,15 @@ class SpreadWindow(QMainWindow):
             self.update_quality_state()
             return
         if self.prefetch_count_default <= 0:
-            self.parameter_status.setText("先読みページ数が0のため、先読み補正は実行しません。")
+            self.parameter_status.setText(
+                tr("先読みページ数が0のため、先読み補正は実行しません。")
+            )
             self.update_quality_state()
             return
         if realcugan_executable() is None:
-            self.stop_prefetch("AI先読み補正を停止しました。Real-CUGANエンジンが見つかりません。")
+            self.stop_prefetch(
+                tr("AI先読み補正を停止しました。Real-CUGANエンジンが見つかりません。")
+            )
             return
         self.prefetch_target_indexes = set(self.visible_and_prefetch_indexes())
         self.prefetch_request_timer.start(PREFETCH_DEBOUNCE_MS)
@@ -1726,11 +1801,15 @@ class SpreadWindow(QMainWindow):
             self.update_quality_state()
             return
         if self.prefetch_count_default <= 0:
-            self.parameter_status.setText("先読みページ数が0のため、先読み補正は実行しません。")
+            self.parameter_status.setText(
+                tr("先読みページ数が0のため、先読み補正は実行しません。")
+            )
             self.update_quality_state()
             return
         if realcugan_executable() is None:
-            self.stop_prefetch("AI先読み補正を停止しました。Real-CUGANエンジンが見つかりません。")
+            self.stop_prefetch(
+                tr("AI先読み補正を停止しました。Real-CUGANエンジンが見つかりません。")
+            )
             return
         settings = self.current_engine_settings()
         if settings is None:
@@ -1749,8 +1828,10 @@ class SpreadWindow(QMainWindow):
         self.prefetch_running = True
         self.active_output_paths = set(output_paths.values())
         skipped_count = len(target_indexes) - len(indexes)
-        suffix = f" / {skipped_count}ページはスキップ" if skipped_count else ""
-        self.parameter_status.setText(f"先読み補正中: {len(indexes)}ページ{suffix}")
+        suffix = tr(" / {count}ページはスキップ", count=skipped_count) if skipped_count else ""
+        self.parameter_status.setText(
+            tr("先読み補正中: {count}ページ{suffix}", count=len(indexes), suffix=suffix)
+        )
         self.update_quality_state()
         self.update_reading_info()
         generation = self.processing_generation
@@ -1859,7 +1940,7 @@ class SpreadWindow(QMainWindow):
         self.last_disk_cache_prune_signature = None
         self.apply_button.setEnabled(True)
         if stale:
-            self.parameter_status.setText("古い先読み結果を破棄しました。")
+            self.parameter_status.setText(tr("古い先読み結果を破棄しました。"))
             self.load_cached_outputs(self.visible_and_prefetch_indexes())
             self.update_quality_state()
             self.request_prefetch()
@@ -1867,13 +1948,21 @@ class SpreadWindow(QMainWindow):
             return
         if errors:
             if is_prefetch:
-                self.stop_prefetch("AI先読み補正を停止しました。原画表示は継続します。")
+                self.stop_prefetch(tr("AI先読み補正を停止しました。原画表示は継続します。"))
                 self.render_spread()
                 return
-            self.parameter_status.setText(f"補正エラーあり: {elapsed_ms / 1000:.1f}秒\n" + "\n".join(errors[:2]))
+            self.parameter_status.setText(
+                tr(
+                    "補正エラーあり: {seconds:.1f}秒\n{errors}",
+                    seconds=elapsed_ms / 1000,
+                    errors="\n".join(errors[:2]),
+                )
+            )
         else:
-            prefix = "先読み補正完了" if is_prefetch else "補正完了"
-            self.parameter_status.setText(f"{prefix}: {elapsed_ms / 1000:.1f}秒")
+            prefix = tr("先読み補正完了") if is_prefetch else tr("補正完了")
+            self.parameter_status.setText(
+                tr("{prefix}: {seconds:.1f}秒", prefix=prefix, seconds=elapsed_ms / 1000)
+            )
         if not is_prefetch:
             self.original_check.setChecked(False)
         self.update_quality_state()
@@ -1990,6 +2079,7 @@ def main() -> None:
     if PYSIDE_IMPORT_ERROR is not None:
         raise SystemExit("PySide6 is required: python3 -m pip install PySide6") from PYSIDE_IMPORT_ERROR
     args = parse_args(sys.argv)
+    initialize_language(DEFAULT_QUALITY_SETTINGS_PATH)
     app = QApplication(sys.argv)
     app.setApplicationName("RAIV")
     if should_open_bookshelf(args):

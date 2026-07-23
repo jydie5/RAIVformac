@@ -16,7 +16,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT_DIR / "src" / "raiv_app" / "main.py"
 DIST_APP = ROOT_DIR / "dist" / "RAIV.app"
 BUNDLE_IDENTIFIER = "jp.raiv.viewer"
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 LICENSES_DIR = ROOT_DIR / "build" / "licenses"
 RUNTIME_DISTRIBUTIONS = (
     "PyInstaller",

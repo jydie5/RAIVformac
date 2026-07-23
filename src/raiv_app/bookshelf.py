@@ -6,6 +6,12 @@ import threading
 from pathlib import Path
 
 from raiv_app.archive_utils import natural_sort_key
+from raiv_app.i18n import (
+    current_language,
+    load_language_preference,
+    save_language_preference,
+    tr,
+)
 from raiv_app.library import (
     Book,
     LibraryPaths,
@@ -30,6 +36,7 @@ if PYSIDE_IMPORT_ERROR is None:
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import (
         QFileDialog,
+        QComboBox,
         QHBoxLayout,
         QLabel,
         QListWidget,
@@ -42,7 +49,7 @@ if PYSIDE_IMPORT_ERROR is None:
         QWidget,
     )
 else:
-    QEvent = QTimer = QObject = QSize = Qt = Signal = QIcon = QFileDialog = QHBoxLayout = QLabel = QListWidget = QListWidgetItem = QMessageBox = QPushButton = QStackedWidget = QVBoxLayout = QWidget = None
+    QEvent = QTimer = QObject = QSize = Qt = Signal = QIcon = QFileDialog = QComboBox = QHBoxLayout = QLabel = QListWidget = QListWidgetItem = QMessageBox = QPushButton = QStackedWidget = QVBoxLayout = QWidget = None
     QMainWindow = object
 
 
@@ -80,8 +87,9 @@ def compact_book_title(title: str, badge: str) -> str:
 
 
 def bookshelf_label(book: Book, state: ReadingState | None) -> str:
-    pages = "未解析" if book.page_count is None else f"{book.page_count}ページ"
-    status = READING_STATUS_LABELS.get(book.reading_status, book.reading_status)
+    pages = tr("未解析") if book.page_count is None else tr("{count}ページ", count=book.page_count)
+    status_key = READING_STATUS_LABELS.get(book.reading_status)
+    status = tr(status_key) if status_key else book.reading_status
     parts = [book.title, pages, status]
     if state is not None:
         parts.append(f"p.{state.page_index + 1}")
@@ -91,14 +99,15 @@ def bookshelf_label(book: Book, state: ReadingState | None) -> str:
 def bookshelf_grid_label(book: Book, state: ReadingState | None) -> str:
     badge = volume_badge(book.title)
     title = compact_book_title(book.title, badge)
-    page_text = "未解析" if book.page_count is None else f"{book.page_count}"
+    page_text = tr("未解析") if book.page_count is None else f"{book.page_count}"
     lines = [badge or title]
     if badge:
         lines.append(title)
     if state is not None:
         lines.append(f"p.{state.page_index + 1} / {page_text}")
     else:
-        lines.append(READING_STATUS_LABELS.get(book.reading_status, book.reading_status))
+        status_key = READING_STATUS_LABELS.get(book.reading_status)
+        lines.append(tr(status_key) if status_key else book.reading_status)
     return "\n".join(lines)
 
 
@@ -157,7 +166,11 @@ def directory_size(path: Path) -> int:
 
 
 def library_location_label(paths: LibraryPaths) -> str:
-    return f"保存先: {paths.library_dir}    使用量: {format_bytes(directory_size(paths.library_dir))}"
+    return tr(
+        "保存先: {path}    使用量: {size}",
+        path=paths.library_dir,
+        size=format_bytes(directory_size(paths.library_dir)),
+    )
 
 
 def preferred_reader_size(screen_geometry) -> QSize:
@@ -172,7 +185,8 @@ def preferred_reader_size(screen_geometry) -> QSize:
 
 def bookshelf_shortcuts_text() -> str:
     return "\n".join(
-        [
+        tr(item)
+        for item in [
             "ファイル/フォルダをドロップ: 本棚へ登録",
             "ダブルクリック: 読む",
             "読む: 選択中の本を開く",
@@ -236,12 +250,24 @@ class BookshelfWindow(QMainWindow):
         header_row.addWidget(header, 1)
         help_button = QPushButton("?", root)
         help_button.setFixedWidth(36)
-        help_button.setToolTip("ショートカットを表示")
+        help_button.setToolTip(tr("ショートカットを表示"))
         help_button.clicked.connect(self.show_shortcuts_help)
         header_row.addWidget(help_button)
+        language_label = QLabel(tr("言語"), root)
+        language_label.setObjectName("subtitle")
+        header_row.addWidget(language_label)
+        self.language_combo = QComboBox(root)
+        self.language_combo.addItem(tr("システム設定"), "auto")
+        self.language_combo.addItem(tr("英語"), "en")
+        self.language_combo.addItem(tr("日本語"), "ja")
+        preference = load_language_preference(self.library.paths.settings_path)
+        preference_index = self.language_combo.findData(preference)
+        self.language_combo.setCurrentIndex(max(0, preference_index))
+        self.language_combo.currentIndexChanged.connect(self.on_language_preference_changed)
+        header_row.addWidget(self.language_combo)
         layout.addLayout(header_row)
 
-        subtitle = QLabel("ローカルの画像フォルダ、単画像、zip/cbz/rar/cbr/7z/cb7 を本棚へ登録します。", root)
+        subtitle = QLabel(tr("ローカルの画像フォルダ、単画像、zip/cbz/rar/cbr/7z/cb7 を本棚へ登録します。"), root)
         subtitle.setObjectName("subtitle")
         layout.addWidget(subtitle)
 
@@ -267,23 +293,23 @@ class BookshelfWindow(QMainWindow):
         layout.addWidget(self.list_widget, 1)
 
         buttons = QHBoxLayout()
-        self.add_file_button = QPushButton("ファイルを追加", root)
+        self.add_file_button = QPushButton(tr("ファイルを追加"), root)
         self.add_file_button.clicked.connect(self.add_file)
         buttons.addWidget(self.add_file_button)
 
-        self.add_folder_button = QPushButton("フォルダを追加", root)
+        self.add_folder_button = QPushButton(tr("フォルダを追加"), root)
         self.add_folder_button.clicked.connect(self.add_folder)
         buttons.addWidget(self.add_folder_button)
 
-        self.open_button = QPushButton("読む", root)
+        self.open_button = QPushButton(tr("読む"), root)
         self.open_button.clicked.connect(self.open_selected_book)
         buttons.addWidget(self.open_button)
 
-        self.delete_button = QPushButton("本棚から削除", root)
+        self.delete_button = QPushButton(tr("本棚から削除"), root)
         self.delete_button.clicked.connect(self.delete_selected_book)
         buttons.addWidget(self.delete_button)
 
-        self.open_library_button = QPushButton("保存先を開く", root)
+        self.open_library_button = QPushButton(tr("保存先を開く"), root)
         self.open_library_button.clicked.connect(self.open_library_folder)
         buttons.addWidget(self.open_library_button)
         buttons.addStretch(1)
@@ -312,22 +338,24 @@ class BookshelfWindow(QMainWindow):
             item.setData(Qt.UserRole, book.id)
             self.list_widget.addItem(item)
         self.library_location_label.setText(library_location_label(self.library.paths))
-        self.status_label.setText(f"{len(books)}冊 / タイトル昇順")
+        self.status_label.setText(tr("{count}冊 / タイトル昇順", count=len(books)))
 
     def confirm_library_location_if_needed(self) -> None:
         if is_library_dir_confirmed(self.library.paths):
             return
         message = QMessageBox(self)
-        message.setWindowTitle("本棚保存先")
+        message.setWindowTitle(tr("本棚保存先"))
         message.setIcon(QMessageBox.Information)
-        message.setText("RAIVの本棚保存先を確認してください。")
+        message.setText(tr("RAIVの本棚保存先を確認してください。"))
         message.setInformativeText(
-            "展開済み漫画は容量が大きくなるため、Finderで見つけやすい場所に保存します。\n\n"
-            f"現在の保存先:\n{self.library.paths.library_dir}"
+            tr(
+                "展開済み漫画は容量が大きくなるため、Finderで見つけやすい場所に保存します。\n\n現在の保存先:\n{path}",
+                path=self.library.paths.library_dir,
+            )
         )
-        use_button = message.addButton("この場所を使う", QMessageBox.AcceptRole)
-        change_button = message.addButton("変更...", QMessageBox.ActionRole)
-        message.addButton("後で", QMessageBox.RejectRole)
+        use_button = message.addButton(tr("この場所を使う"), QMessageBox.AcceptRole)
+        change_button = message.addButton(tr("変更..."), QMessageBox.ActionRole)
+        message.addButton(tr("後で"), QMessageBox.RejectRole)
         message.exec()
         clicked = message.clickedButton()
         if clicked == use_button:
@@ -335,6 +363,15 @@ class BookshelfWindow(QMainWindow):
             self.reload_books()
         elif clicked == change_button:
             self.choose_library_location()
+
+    def on_language_preference_changed(self, _index: int) -> None:
+        preference = self.language_combo.currentData()
+        save_language_preference(preference, self.library.paths.settings_path)
+        QMessageBox.information(
+            self,
+            tr("言語設定"),
+            tr("言語設定を保存しました。RAIVを再起動すると反映されます。"),
+        )
 
     def eventFilter(self, watched, event) -> bool:
         if watched in {self.list_widget, self.list_widget.viewport()} and self.handle_drop_event(event):
@@ -360,7 +397,7 @@ class BookshelfWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def show_shortcuts_help(self) -> None:
-        QMessageBox.information(self, "ショートカット", bookshelf_shortcuts_text())
+        QMessageBox.information(self, tr("ショートカット"), bookshelf_shortcuts_text())
 
     def handle_drop_event(self, event) -> bool:
         if event.type() in {QEvent.DragEnter, QEvent.DragMove}:
@@ -380,7 +417,7 @@ class BookshelfWindow(QMainWindow):
         if not paths:
             return
         event.acceptProposedAction()
-        if self.confirm_register_paths(paths, "ドロップしたファイル/フォルダ"):
+        if self.confirm_register_paths(paths, tr("ドロップしたファイル/フォルダ")):
             self.enqueue_register_paths(paths)
 
     def confirm_register_paths(self, paths: list[Path], source_label: str) -> bool:
@@ -392,41 +429,42 @@ class BookshelfWindow(QMainWindow):
         file_count = len(paths) - folder_count - archive_count
         examples = "\n".join(f"- {path.name}" for path in paths[:5])
         if len(paths) > 5:
-            examples += f"\n- ほか {len(paths) - 5} 件"
-        detail = (
-            f"{source_label}を本棚へ登録します。\n\n"
-            f"対象: {len(paths)}件"
-            f"（圧縮ファイル {archive_count}件 / フォルダ {folder_count}件 / ファイル {file_count}件）\n\n"
-            f"{examples}\n\n"
-            "圧縮ファイルは本棚保存先へ展開し、表紙サムネイルを作成します。\n"
-            "元のZIP/RAR/7zファイルは削除しません。"
+            examples += tr("\n- ほか {count} 件", count=len(paths) - 5)
+        detail = tr(
+            "{source}を本棚へ登録します。\n\n対象: {total}件（圧縮ファイル {archives}件 / フォルダ {folders}件 / ファイル {files}件）\n\n{examples}\n\n圧縮ファイルは本棚保存先へ展開し、表紙サムネイルを作成します。\n元のZIP/RAR/7zファイルは削除しません。",
+            source=source_label,
+            total=len(paths),
+            archives=archive_count,
+            folders=folder_count,
+            files=file_count,
+            examples=examples,
         )
         message = QMessageBox(self)
-        message.setWindowTitle("本棚へ登録")
+        message.setWindowTitle(tr("本棚へ登録"))
         message.setIcon(QMessageBox.Question)
-        message.setText("展開して本棚へ登録しますか？")
+        message.setText(tr("展開して本棚へ登録しますか？"))
         message.setInformativeText(detail)
         message.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         message.setDefaultButton(QMessageBox.Yes)
         if message.exec() != QMessageBox.Yes:
-            self.status_label.setText("登録をキャンセルしました。")
+            self.status_label.setText(tr("登録をキャンセルしました。"))
             return False
         self.status_label.setText(detail.splitlines()[0])
         return True
 
     def choose_library_location(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "本棚保存先を選択", str(self.library.paths.library_dir))
+        path = QFileDialog.getExistingDirectory(self, tr("本棚保存先を選択"), str(self.library.paths.library_dir))
         if not path:
             return
         new_library_dir = Path(path).expanduser()
         try:
             self.move_library_storage(new_library_dir)
         except Exception as exc:
-            self.status_label.setText(f"保存先を変更できません: {exc}")
+            self.status_label.setText(tr("保存先を変更できません: {error}", error=exc))
             return
         save_library_settings(self.library.paths, library_dir_confirmed=True)
         self.reload_books()
-        self.status_label.setText(f"保存先を変更しました: {self.library.paths.library_dir}")
+        self.status_label.setText(tr("保存先を変更しました: {path}", path=self.library.paths.library_dir))
 
     def move_library_storage(self, new_library_dir: Path) -> None:
         old_paths = self.library.paths
@@ -460,14 +498,14 @@ class BookshelfWindow(QMainWindow):
     def add_file(self) -> None:
         paths, _selected_filter = QFileDialog.getOpenFileNames(
             self,
-            "本棚に追加",
+            tr("本棚に追加"),
             str(Path.home()),
             "Images and archives (*.zip *.cbz *.rar *.cbr *.7z *.cb7 *.png *.jpg *.jpeg *.webp *.bmp *.gif *.tif *.tiff *.avif);;All files (*)",
         )
         self.enqueue_register_paths([Path(path) for path in paths])
 
     def add_folder(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "画像フォルダを本棚に追加", str(Path.home()))
+        path = QFileDialog.getExistingDirectory(self, tr("画像フォルダを本棚に追加"), str(Path.home()))
         if path:
             self.enqueue_register_paths([Path(path)])
 
@@ -476,7 +514,7 @@ class BookshelfWindow(QMainWindow):
             return
         self.register_queue.extend(paths)
         self.register_total += len(paths)
-        self.status_label.setText(f"取り込み待ち {len(self.register_queue)}件")
+        self.status_label.setText(tr("取り込み待ち {count}件", count=len(self.register_queue)))
         self.start_next_register()
 
     def register_path(self, path: Path) -> None:
@@ -493,14 +531,19 @@ class BookshelfWindow(QMainWindow):
         self.register_running = True
         position = self.register_done_count + 1
         total = self.register_done_count + 1 + len(self.register_queue)
-        self.status_label.setText(f"取り込み中 {position}/{total}: {path.name}")
+        self.status_label.setText(
+            tr("取り込み中 {position}/{total}: {name}", position=position, total=total, name=path.name)
+        )
         threading.Thread(target=self._register_worker, args=(path,), daemon=True).start()
 
     def _register_worker(self, path: Path) -> None:
         worker_library = LibraryService.open(self.library.paths)
         try:
             books = worker_library.register_local_books(path)
-            self.signals.register_progress.emit(books, f"本棚に追加しました。展開中: {path.name}")
+            self.signals.register_progress.emit(
+                books,
+                tr("本棚に追加しました。展開中: {name}", name=path.name),
+            )
             imported_books: list[Book] = []
             for index, book in enumerate(books, start=1):
                 if book.file_kind in {"zip", "cbz", "rar", "cbr", "7z", "cb7"}:
@@ -508,7 +551,12 @@ class BookshelfWindow(QMainWindow):
                 imported_books.append(worker_library.books.get(book.id) or book)
                 self.signals.register_progress.emit(
                     imported_books.copy(),
-                    f"展開中 {index}/{len(books)}: {book.title}",
+                    tr(
+                        "展開中 {position}/{total}: {title}",
+                        position=index,
+                        total=len(books),
+                        title=book.title,
+                    ),
                 )
             self.signals.register_done.emit(imported_books, None)
         except Exception as exc:
@@ -525,18 +573,20 @@ class BookshelfWindow(QMainWindow):
         self.register_running = False
         self.register_done_count += 1
         if error is not None:
-            self.status_label.setText(f"登録失敗: {error}")
+            self.status_label.setText(tr("登録失敗: {error}", error=error))
             self.start_next_register()
             return
         self.reload_books()
-        label = "、".join(book.title for book in (books or [])[:2])
+        label = ("、" if current_language() == "ja" else ", ").join(
+            book.title for book in (books or [])[:2]
+        )
         if books and len(books) > 2:
-            label += f" ほか{len(books) - 2}冊"
+            label += tr(" ほか{count}冊", count=len(books) - 2)
         if self.register_queue:
-            self.status_label.setText(f"登録しました: {label}")
+            self.status_label.setText(tr("登録しました: {label}", label=label))
             self.start_next_register()
         else:
-            self.status_label.setText(f"登録しました: {label}")
+            self.status_label.setText(tr("登録しました: {label}", label=label))
             self.register_total = 0
             self.register_done_count = 0
 
@@ -549,7 +599,7 @@ class BookshelfWindow(QMainWindow):
         try:
             subprocess.Popen(["open", str(self.library.paths.library_dir)])
         except Exception as exc:
-            self.status_label.setText(f"保存先を開けません: {exc}")
+            self.status_label.setText(tr("保存先を開けません: {error}", error=exc))
 
     def selected_book(self) -> Book | None:
         item = self.list_widget.currentItem()
@@ -561,49 +611,50 @@ class BookshelfWindow(QMainWindow):
     def delete_selected_book(self) -> None:
         book = self.selected_book()
         if book is None:
-            self.status_label.setText("削除する本を選んでください。")
+            self.status_label.setText(tr("削除する本を選んでください。"))
             return
         title = book.title
         message = QMessageBox(self)
-        message.setWindowTitle("本棚から削除")
+        message.setWindowTitle(tr("本棚から削除"))
         message.setIcon(QMessageBox.Warning)
-        message.setText("この本を本棚から削除しますか？")
+        message.setText(tr("この本を本棚から削除しますか？"))
         message.setInformativeText(
             f"{title}\n\n"
-            "RAIVが作成した展開済みフォルダ、読書位置、しおりを削除します。\n"
-            "元のZIP/RAR/7zファイルは削除しません。"
+            + tr(
+                "RAIVが作成した展開済みフォルダ、読書位置、しおりを削除します。\n元のZIP/RAR/7zファイルは削除しません。"
+            )
         )
         message.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         message.setDefaultButton(QMessageBox.No)
         if message.exec() != QMessageBox.Yes:
-            self.status_label.setText("削除をキャンセルしました。")
+            self.status_label.setText(tr("削除をキャンセルしました。"))
             return
         if self.library.delete_book(book.id):
             self.reload_books()
-            self.status_label.setText(f"本棚から削除しました: {title}")
+            self.status_label.setText(tr("本棚から削除しました: {title}", title=title))
         else:
-            self.status_label.setText(f"削除できませんでした: {title}")
+            self.status_label.setText(tr("削除できませんでした: {title}", title=title))
 
     def open_selected_book(self) -> None:
         book = self.selected_book()
         if book is None:
-            self.status_label.setText("読む本を選んでください。")
+            self.status_label.setText(tr("読む本を選んでください。"))
             return
         self.open_book(book.id)
 
     def open_book(self, book_id: str, fullscreen: bool = False) -> None:
         book = self.library.books.get(book_id)
         if book is None:
-            self.status_label.setText("本が見つかりません。")
+            self.status_label.setText(tr("本が見つかりません。"))
             return
         source = Path(book.local_path)
         try:
             pages, cleanup_dir = open_pages_for_viewer(source)
         except Exception as exc:
-            self.status_label.setText(f"読み込み失敗: {exc}")
+            self.status_label.setText(tr("読み込み失敗: {error}", error=exc))
             return
         if not pages:
-            self.status_label.setText(f"画像が見つかりません: {source}")
+            self.status_label.setText(tr("画像が見つかりません: {source}", source=source))
             return
         state = self.library.reading_states.get(book.id)
         next_book = next_book_after_reading(book.id, self.library.books.list_books())
@@ -647,7 +698,7 @@ class BookshelfWindow(QMainWindow):
     def open_next_book_from_window(self, current_book_id: str, window: SpreadWindow) -> None:
         next_book = next_book_after_reading(current_book_id, self.library.books.list_books())
         if next_book is None:
-            window.statusBar().showMessage("次の巻はありません。")
+            window.statusBar().showMessage(tr("次の巻はありません。"))
             return
         self.save_reading_state(current_book_id, window)
         was_fullscreen = window.is_fullscreen

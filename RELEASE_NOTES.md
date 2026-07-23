@@ -1,4 +1,25 @@
-# Unreleased
+# RAIV for mac v0.3.0-alpha
+
+## Highlights
+
+- English and Japanese interface with automatic macOS language detection
+- Language selector in the bookshelf header
+- English bookshelf, reader controls, dialogs, keyboard help, and processing status
+- Faster back-and-forth page navigation with asynchronous display decoding
+- Adaptive Real-CUGAN prefetch with bounded forward, backward, memory, and disk caches
+- English-first public documentation and freely licensed demo books
+
+The standalone ZIP includes RAIV.app and the pinned Real-CUGAN engine. End users
+do not need Python, uv, or a separate AI engine installation.
+
+## 主な変更
+
+- macOSの優先言語に追従する英語／日本語UI
+- 本棚右上に言語選択を追加
+- 本棚、読書設定、確認画面、ヘルプ、補正状態を英語化
+- 非同期画像デコードにより前後ページ移動を高速化
+- 前後ページを過不足なく保持する適応型Real-CUGAN先読み
+- 英語を基本とした公開ドキュメントと自由ライセンスのデモ本
 
 ## Features
 

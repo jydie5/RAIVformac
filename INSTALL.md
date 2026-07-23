@@ -30,6 +30,12 @@ The `.sha256` file is provided for integrity verification.
 
 Normal double-click launching should work afterward.
 
+## Choose the interface language
+
+RAIV follows the first preferred language in macOS and includes English and
+Japanese. Use the **Language** selector in the bookshelf header to override the
+system choice, then restart RAIV.
+
 ## If macOS blocks the app
 
 The current alpha does not have an Apple Developer ID signature or notarization.

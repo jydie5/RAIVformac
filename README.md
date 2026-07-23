@@ -2,9 +2,10 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
-RAIV for mac is an image and manga viewer for Apple Silicon Macs. It combines a
-visual bookshelf, two-page reading, and automatic Real-CUGAN enhancement in a
-native desktop application.
+RAIV for mac is a free, open-source macOS comic reader and image viewer for
+Apple Silicon. It reads CBZ, CBR, ZIP, RAR, 7z, image folders, and individual
+images, combining a visual bookshelf, two-page manga reading, and automatic
+Real-CUGAN AI upscaling in a native desktop application.
 
 This is an independent macOS implementation inspired by
 [nalltama/RAIV](https://github.com/nalltama/RAIV). It is not an official release
@@ -55,8 +56,16 @@ RAIV keeps the source archive untouched. It stores an extracted reading copy in
 - Simple quality modes and saved manual presets
 - Instant original/enhanced comparison
 - Managed library removal without deleting the source archive
+- English and Japanese UI with macOS language detection
 
 See [ROADMAP.md](ROADMAP.md) for planned work and known improvement areas.
+
+## Language
+
+RAIV follows the first preferred language in macOS. English and Japanese are
+included. Use the **Language** selector in the bookshelf header to choose
+**System**, **English**, or **Japanese**. Restart RAIV after changing it so the
+bookshelf, reader, dialogs, help, and status messages all use the same language.
 
 ## AI enhancement
 
@@ -122,7 +131,6 @@ bookshelf and cache.
 ## Current limitations
 
 - Apple Silicon only; Intel Macs are not currently supported.
-- The application UI is currently Japanese. English UI localization is planned.
 - The alpha is unsigned and not notarized.
 - Some RAR variants may not be compatible with the available macOS extraction
   backend.
@@ -153,6 +161,14 @@ Run the development test suite:
 uv sync --extra dev
 uv run pytest
 ```
+
+## Support development
+
+RAIV for mac remains free software under the MIT License whether or not you
+support its development. Stars, bug reports, testing, and code contributions are
+valuable. Optional donations are also compatible with the project licenses, but
+no official payment account is configured yet. Trust only funding links
+published in this repository.
 
 ## License
 

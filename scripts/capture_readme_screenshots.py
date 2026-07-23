@@ -15,6 +15,7 @@ sys.path.insert(0, str(REPOSITORY_ROOT / "src"))
 from PySide6.QtWidgets import QApplication
 
 from raiv_app.bookshelf import BookshelfWindow
+from raiv_app.i18n import set_language
 from raiv_app.library import LibraryPaths, LibraryService, save_library_settings
 from raiv_app.viewer import SpreadWindow
 
@@ -26,11 +27,12 @@ def process_events(app: QApplication, seconds: float) -> None:
         time.sleep(0.02)
 
 
-def capture(demo_dir: Path, output_dir: Path) -> None:
+def capture(demo_dir: Path, output_dir: Path, language: str = "en") -> None:
     archives = sorted(demo_dir.glob("*.zip"))
     if not archives:
         raise RuntimeError(f"no demo ZIP files found in {demo_dir}")
 
+    set_language(language)
     app = QApplication.instance() or QApplication([])
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -46,7 +48,9 @@ def capture(demo_dir: Path, output_dir: Path) -> None:
             bookshelf = BookshelfWindow(library)
             bookshelf.resize(1400, 900)
             bookshelf.library_location_label.setText(
-                "Demo library: Pepper&Carrot (CC BY 4.0)    3 books"
+                "デモ本棚: Pepper&Carrot (CC BY 4.0)    3冊"
+                if language == "ja"
+                else "Demo library: Pepper&Carrot (CC BY 4.0)    3 books"
             )
             bookshelf.show()
             process_events(app, 0.8)
@@ -83,8 +87,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Capture README screenshots with free demo books.")
     parser.add_argument("--demo-dir", type=Path, default=REPOSITORY_ROOT / "demo")
     parser.add_argument("--output-dir", type=Path, default=REPOSITORY_ROOT / "docs" / "images")
+    parser.add_argument("--language", choices=("en", "ja"), default="en")
     args = parser.parse_args()
-    capture(args.demo_dir.resolve(), args.output_dir.resolve())
+    capture(args.demo_dir.resolve(), args.output_dir.resolve(), args.language)
 
 
 if __name__ == "__main__":

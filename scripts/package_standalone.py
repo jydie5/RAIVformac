@@ -12,7 +12,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 APP_PATH = ROOT_DIR / "dist" / "RAIV.app"
 AUDIT_PATH = ROOT_DIR / "dist" / "distribution-audit.json"
-DEFAULT_VERSION = "0.2.0-alpha"
+DEFAULT_VERSION = "0.3.0-alpha"
 FORBIDDEN_ARCHIVE_TERMS = (
     "sample/",
     "test/",

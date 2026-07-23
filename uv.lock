@@ -860,7 +860,7 @@ wheels = [
 
 [[package]]
 name = "raiv"
-version = "0.2.0a0"
+version = "0.3.0a0"
 source = { editable = "." }
 dependencies = [
     { name = "pillow" },
