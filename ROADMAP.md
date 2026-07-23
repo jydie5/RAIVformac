@@ -6,7 +6,7 @@
 
 追跡: [Issue #2 原画＋3種類の簡単画質モード](https://github.com/jydie5/RAIVformac/issues/2)
 
-状態: 実装済み（Draft PR #5）
+状態: 実装済み（PR #5でmainへ反映）
 
 通常の読書では「原画」と3種類の補正モードだけを表示します。名称は目視評価後に確定します。
 
@@ -29,7 +29,7 @@
 
 追跡: [Issue #3 マニュアル画質モードとカスタム設定保存](https://github.com/jydie5/RAIVformac/issues/3)
 
-状態: 実装済み（Draft PR #5）
+状態: 実装済み（PR #5でmainへ反映）
 
 詳細設定を必要とする利用者だけがマニュアルモードへ切り替えられるようにします。
 
@@ -43,7 +43,7 @@
 
 追跡: [Issue #4 読書速度に追従するバックグラウンド先読み](https://github.com/jydie5/RAIVformac/issues/4)
 
-状態: 実装済み（Draft PR #5）
+状態: 実装済み（PR #5でmainへ反映）
 
 読書操作を優先し、通常は先読み処理の存在を意識させない設計にします。
 
