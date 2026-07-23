@@ -511,7 +511,7 @@ class SpreadWindow(QMainWindow):
             button.clicked.connect(lambda _checked=False, item=preset: self.apply_preset(item))
             simple_layout.addWidget(button)
             simple_layout.addWidget(self.help_label(preset["description"]))
-        self.preset_status = QLabel("自然を基準に、原稿に合わせてクリーニングや高画質を選びます。", self.simple_panel)
+        self.preset_status = QLabel("選択中: 自然", self.simple_panel)
         self.preset_status.setWordWrap(True)
         self.preset_status.setStyleSheet("color: #dddddd; font-size: 13px;")
         simple_layout.addWidget(self.preset_status)
@@ -680,9 +680,7 @@ class SpreadWindow(QMainWindow):
         self.current_quality_preset = preset["name"]
         if not is_original:
             self.last_corrected_preset_name = preset["name"]
-        self.preset_status.setText(
-            preset.get("description") or f"{preset['name']}のカスタム設定を使用します。"
-        )
+        self.preset_status.setText(f"選択中: {preset['name']}")
         if is_original:
             self.parameter_status.setText("原画表示に切り替えました。補正処理は行いません。")
         else:
