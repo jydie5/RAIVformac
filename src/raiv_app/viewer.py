@@ -11,7 +11,7 @@ from hashlib import sha1
 from math import ceil
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image
 from raiv_app.archive_utils import discover_samples, load_sample_pages
 from raiv_app.engine_utils import realcugan_executable, run_realcugan
 from raiv_app.quality_settings import (
@@ -22,8 +22,8 @@ from raiv_app.quality_settings import (
 )
 
 try:
-    from PySide6.QtCore import QEvent, QObject, QTimer, Qt, Signal
-    from PySide6.QtGui import QPixmap
+    from PySide6.QtCore import QEvent, QObject, QRunnable, QSize, QThreadPool, QTimer, Qt, Signal
+    from PySide6.QtGui import QImage, QPixmap
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -44,7 +44,8 @@ try:
     )
     PYSIDE_IMPORT_ERROR: ImportError | None = None
 except ImportError as exc:
-    QEvent = QObject = QTimer = Qt = Signal = QPixmap = QApplication = QCheckBox = QComboBox = QFormLayout = None
+    QEvent = QObject = QRunnable = QSize = QThreadPool = QTimer = Qt = Signal = QImage = QPixmap = None
+    QApplication = QCheckBox = QComboBox = QFormLayout = None
     QHBoxLayout = QInputDialog = QLabel = QMessageBox = QProgressBar = QPushButton = QScrollArea = QSpinBox = QVBoxLayout = QWidget = QFileDialog = None
     QMainWindow = object
     PYSIDE_IMPORT_ERROR = exc
@@ -71,6 +72,7 @@ DISK_RETENTION_PREVIOUS_COUNT = 12
 PREFETCH_DEBOUNCE_MS = 90
 DISPLAY_WARM_DEBOUNCE_MS = 180
 CACHE_MAINTENANCE_DEBOUNCE_MS = 900
+PAGE_STATE_SAVE_DEBOUNCE_MS = 350
 MODEL_NOISE_OPTIONS = {
     "models-pro": ["3"],
     "models-se": ["-1", "0", "1", "2", "3"],
@@ -266,6 +268,63 @@ def missing_processed_indexes(
 class WorkerSignals(QObject):
     upscale_page_done = Signal(int, object, int, object)
     upscale_done = Signal(int, object, object, int, object, bool)
+    display_image_done = Signal(object, object, int)
+
+
+def decode_scaled_display_image(
+    display_path: Path,
+    target_width: int,
+    target_height: int,
+    high_quality: bool,
+    force_grayscale: bool,
+) -> QImage:
+    image = QImage(str(display_path))
+    if image.isNull():
+        return image
+    if force_grayscale:
+        image = image.convertToFormat(QImage.Format_Grayscale8)
+    transform_mode = Qt.SmoothTransformation if high_quality else Qt.FastTransformation
+    return image.scaled(
+        QSize(target_width, target_height),
+        Qt.KeepAspectRatio,
+        transform_mode,
+    )
+
+
+class DisplayRenderTask(QRunnable if QRunnable is not None else object):
+    def __init__(
+        self,
+        signals: WorkerSignals,
+        cache_key: tuple,
+        display_path: Path,
+        target_width: int,
+        target_height: int,
+        high_quality: bool,
+        force_grayscale: bool,
+    ) -> None:
+        super().__init__()
+        self.signals = signals
+        self.cache_key = cache_key
+        self.display_path = display_path
+        self.target_width = target_width
+        self.target_height = target_height
+        self.high_quality = high_quality
+        self.force_grayscale = force_grayscale
+
+    def run(self) -> None:
+        started = time.perf_counter()
+        image = decode_scaled_display_image(
+            self.display_path,
+            self.target_width,
+            self.target_height,
+            self.high_quality,
+            self.force_grayscale,
+        )
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        try:
+            self.signals.display_image_done.emit(self.cache_key, image, elapsed_ms)
+        except RuntimeError:
+            pass
 
 
 class SpreadWindow(QMainWindow):
@@ -334,8 +393,16 @@ class SpreadWindow(QMainWindow):
         self.controls_visible = True
         self.reading_info_visible = False
         self.image_size_cache: dict[int, tuple[int, int]] = {}
-        self.display_pixmap_cache: OrderedDict[tuple[str, int, int, int, int, int], QPixmap] = OrderedDict()
+        self.display_pixmap_cache: OrderedDict[tuple, QPixmap] = OrderedDict()
         self.display_pixmap_cache_limit = 18
+        self.pending_display_renders: dict[tuple, int] = {}
+        self.desired_display_keys: dict[int, tuple | None] = {}
+        self.fallback_display_keys: dict[int, tuple | None] = {}
+        self.display_decode_times_ms: deque[int] = deque(maxlen=32)
+        self.visible_display_pool = QThreadPool(self)
+        self.visible_display_pool.setMaxThreadCount(2)
+        self.warm_display_pool = QThreadPool(self)
+        self.warm_display_pool.setMaxThreadCount(2)
         self.last_disk_cache_prune_signature: tuple[str, tuple[int, ...]] | None = None
         self.fast_resize_render = False
         self.resize_quality_delay_ms = 180
@@ -351,9 +418,13 @@ class SpreadWindow(QMainWindow):
         self.cache_maintenance_timer = QTimer(self)
         self.cache_maintenance_timer.setSingleShot(True)
         self.cache_maintenance_timer.timeout.connect(self.prune_revolving_correction_cache)
+        self.page_state_save_timer = QTimer(self)
+        self.page_state_save_timer.setSingleShot(True)
+        self.page_state_save_timer.timeout.connect(self.flush_page_changed)
         self.signals = WorkerSignals()
         self.signals.upscale_page_done.connect(self.on_upscale_page_done)
         self.signals.upscale_done.connect(self.on_upscale_done)
+        self.signals.display_image_done.connect(self.on_display_image_done)
 
         direction_label = "right-bound" if self.is_right_bound() else "left-bound"
         self.setWindowTitle(f"RAIV spread smoke: {title} ({direction_label}, spread-{self.spread_order})")
@@ -843,6 +914,7 @@ class SpreadWindow(QMainWindow):
 
     def on_original_compare_changed(self) -> None:
         visible_indexes = self.visible_page_indexes()
+        self.clear_queued_display_requests()
         self.display_pixmap_cache.clear()
         self.left.clear()
         self.right.clear()
@@ -895,6 +967,7 @@ class SpreadWindow(QMainWindow):
     def on_processing_settings_changed(self) -> None:
         self.processing_generation += 1
         self.processed_pages = [None] * len(self.pages)
+        self.clear_queued_display_requests()
         self.display_pixmap_cache.clear()
         self.output_path_cache.clear()
         self.last_disk_cache_prune_signature = None
@@ -998,6 +1071,7 @@ class SpreadWindow(QMainWindow):
         super().resizeEvent(event)
         self.position_reading_info_overlay()
         self.position_next_book_overlay()
+        self.clear_queued_display_requests()
         self.fast_resize_render = True
         self.render_spread(high_quality=False)
         self.resize_quality_timer.start(self.resize_quality_delay_ms)
@@ -1068,6 +1142,7 @@ class SpreadWindow(QMainWindow):
             next_index = self.index + step
         self.index = max(0, min(len(self.pages) - 1, next_index))
         if self.index != previous_index:
+            self.clear_queued_visible_requests()
             self.record_navigation_speed(abs(self.index - previous_index))
             self.invalidate_prefetch_for_navigation()
         self.render_spread()
@@ -1094,6 +1169,11 @@ class SpreadWindow(QMainWindow):
         self.prefetch_target_indexes = set(self.visible_and_prefetch_indexes())
 
     def notify_page_changed(self) -> None:
+        if self.page_changed_callback is not None:
+            self.page_state_save_timer.start(PAGE_STATE_SAVE_DEBOUNCE_MS)
+
+    def flush_page_changed(self) -> None:
+        self.page_state_save_timer.stop()
         if self.page_changed_callback is not None:
             self.page_changed_callback(self.index)
 
@@ -1170,6 +1250,7 @@ class SpreadWindow(QMainWindow):
         self.update_page_pane_alignment(left_index, right_index)
         self.render_label(self.left, left_index, high_quality=high_quality)
         self.render_label(self.right, right_index, high_quality=high_quality)
+        self.apply_ready_spread_pixmaps()
         page_text = page_progress_text(visible_indexes, len(self.pages))
         processed_count = sum(1 for path in self.processed_pages if path is not None)
         file_text = visible_file_names(self.pages, visible_indexes)
@@ -1195,23 +1276,45 @@ class SpreadWindow(QMainWindow):
 
     def render_label(self, label: QLabel, index: int, high_quality: bool = True) -> None:
         if index < 0 or index >= len(self.pages):
+            self.desired_display_keys[id(label)] = None
+            self.fallback_display_keys[id(label)] = None
             label.setText("")
             label.setPixmap(QPixmap())
             return
-        display_path = self.display_path_for_index(index)
-        scaled = self.scaled_pixmap(display_path, label.size(), high_quality=high_quality)
-        if scaled.isNull():
-            label.setText(f"Failed to load:\n{display_path.name}")
-            label.setPixmap(QPixmap())
-            return
-        label.setText("")
-        label.setPixmap(scaled)
+        display_path, force_grayscale = self.display_source_for_index(index)
+        original_path = self.pages[index]
+        fallback_key = None
+        if display_path != original_path:
+            _fallback, fallback_key = self.request_display_pixmap(
+                original_path,
+                label.size(),
+                high_quality=high_quality,
+                force_grayscale=False,
+                visible=True,
+            )
+        _cached, cache_key = self.request_display_pixmap(
+            display_path,
+            label.size(),
+            high_quality=high_quality,
+            force_grayscale=force_grayscale,
+            visible=True,
+        )
+        self.desired_display_keys[id(label)] = cache_key
+        self.fallback_display_keys[id(label)] = fallback_key or cache_key
 
     def display_path_for_index(self, index: int) -> Path:
+        return self.display_source_for_index(index)[0]
+
+    def display_source_for_index(self, index: int) -> tuple[Path, bool]:
         visible_indexes = self.visible_page_indexes()
         show_original = index in visible_indexes and self.visible_spread_uses_original(visible_indexes)
         display_path = self.pages[index] if show_original else self.processed_pages[index] or self.pages[index]
-        return self.display_safe_path(index, display_path)
+        if display_path == self.pages[index]:
+            return display_path, False
+        cached_path = display_cache_path_for(display_path)
+        if cached_path is not None and cached_path.exists():
+            return cached_path, False
+        return display_path, True
 
     def visible_spread_uses_original(self, visible_indexes: list[int] | None = None) -> bool:
         if bool(getattr(self, "original_check", None) and self.original_check.isChecked()):
@@ -1222,34 +1325,113 @@ class SpreadWindow(QMainWindow):
             return True
         return bool(self.visible_missing_correction_indexes(visible_indexes))
 
-    def scaled_pixmap(self, display_path: Path, target, high_quality: bool = True) -> QPixmap:
+    def display_cache_key(
+        self,
+        display_path: Path,
+        target,
+        high_quality: bool,
+        force_grayscale: bool,
+    ) -> tuple | None:
         if target.width() <= 0 or target.height() <= 0:
-            return QPixmap()
+            return None
         try:
             stat = display_path.stat()
-            key = (
+            return (
                 str(display_path),
                 stat.st_size,
                 stat.st_mtime_ns,
                 target.width(),
                 target.height(),
                 1 if high_quality else 0,
+                1 if force_grayscale else 0,
             )
         except OSError:
-            return QPixmap()
+            return None
+
+    def request_display_pixmap(
+        self,
+        display_path: Path,
+        target,
+        *,
+        high_quality: bool = True,
+        force_grayscale: bool = False,
+        visible: bool = False,
+    ) -> tuple[QPixmap | None, tuple | None]:
+        key = self.display_cache_key(display_path, target, high_quality, force_grayscale)
+        if key is None:
+            return None, None
         cached = self.display_pixmap_cache.get(key)
         if cached is not None:
             self.display_pixmap_cache.move_to_end(key)
-            return cached
-        pixmap = QPixmap(str(display_path))
-        if pixmap.isNull():
-            return pixmap
-        transform_mode = Qt.SmoothTransformation if high_quality else Qt.FastTransformation
-        scaled = pixmap.scaled(target, Qt.KeepAspectRatio, transform_mode)
-        self.display_pixmap_cache[key] = scaled
+            return cached, key
+        priority = 1 if visible else 0
+        pending_priority = self.pending_display_renders.get(key, -1)
+        if pending_priority < priority or key not in self.pending_display_renders:
+            self.pending_display_renders[key] = priority
+            task = DisplayRenderTask(
+                self.signals,
+                key,
+                display_path,
+                target.width(),
+                target.height(),
+                high_quality,
+                force_grayscale,
+            )
+            pool = self.visible_display_pool if visible else self.warm_display_pool
+            pool.start(task)
+        return None, key
+
+    def cache_display_pixmap(self, key: tuple, pixmap: QPixmap) -> None:
+        self.display_pixmap_cache[key] = pixmap
+        self.display_pixmap_cache.move_to_end(key)
         while len(self.display_pixmap_cache) > self.display_pixmap_cache_limit:
             self.display_pixmap_cache.popitem(last=False)
-        return scaled
+
+    def clear_queued_visible_requests(self) -> None:
+        self.visible_display_pool.clear()
+        self.warm_display_pool.clear()
+        self.pending_display_renders.clear()
+
+    def clear_queued_display_requests(self) -> None:
+        self.visible_display_pool.clear()
+        self.warm_display_pool.clear()
+        self.pending_display_renders.clear()
+
+    def on_display_image_done(self, key: tuple, image: QImage, elapsed_ms: int) -> None:
+        if self.is_closing:
+            return
+        self.pending_display_renders.pop(key, None)
+        if image.isNull():
+            return
+        self.display_decode_times_ms.append(elapsed_ms)
+        pixmap = QPixmap.fromImage(image)
+        self.cache_display_pixmap(key, pixmap)
+        self.apply_ready_spread_pixmaps()
+
+    def apply_ready_spread_pixmaps(self) -> None:
+        labels = (self.left, self.right)
+        desired = [(label, self.desired_display_keys.get(id(label))) for label in labels]
+        fallback = [(label, self.fallback_display_keys.get(id(label))) for label in labels]
+
+        def ready(items: list[tuple[QLabel, tuple | None]]) -> bool:
+            return all(key is None or key in self.display_pixmap_cache for _label, key in items)
+
+        selected = desired if ready(desired) else fallback if ready(fallback) else None
+        if selected is None:
+            for label, key in desired:
+                if key is not None:
+                    label.setText("")
+                    label.setPixmap(QPixmap())
+            return
+        for label, key in selected:
+            if key is None:
+                label.setText("")
+                label.setPixmap(QPixmap())
+                continue
+            pixmap = self.display_pixmap_cache[key]
+            self.display_pixmap_cache.move_to_end(key)
+            label.setText("")
+            label.setPixmap(pixmap)
 
     def warm_display_pixmap_cache(self, indexes: list[int]) -> None:
         if not indexes:
@@ -1265,9 +1447,15 @@ class SpreadWindow(QMainWindow):
         for index in indexes:
             if index < 0 or index >= len(self.pages):
                 continue
-            display_path = self.display_path_for_index(index)
+            display_path, force_grayscale = self.display_source_for_index(index)
             for target in targets:
-                self.scaled_pixmap(display_path, target)
+                self.request_display_pixmap(
+                    display_path,
+                    target,
+                    high_quality=True,
+                    force_grayscale=force_grayscale,
+                    visible=False,
+                )
 
     def warm_nearby_display_cache(self) -> None:
         if self.is_closing:
@@ -1280,22 +1468,6 @@ class SpreadWindow(QMainWindow):
             DISPLAY_WARM_PREVIOUS_COUNT,
         )
         self.warm_display_pixmap_cache(indexes)
-
-    def display_safe_path(self, index: int, display_path: Path) -> Path:
-        if display_path == self.pages[index]:
-            return display_path
-        try:
-            cached_path = display_cache_path_for(display_path)
-            if cached_path is None:
-                return display_path
-            if cached_path.exists():
-                return cached_path
-            DISPLAY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            with Image.open(display_path) as image:
-                ImageOps.grayscale(image).save(cached_path)
-            return cached_path
-        except Exception:
-            return display_path
 
     def visible_page_indexes(self) -> list[int]:
         if self.index < 0 or self.index >= len(self.pages):
@@ -1657,6 +1829,7 @@ class SpreadWindow(QMainWindow):
         if index in visible_indexes and not self.visible_missing_correction_indexes(visible_indexes):
             self.render_spread(high_quality=True)
         else:
+            self.warm_display_pixmap_cache([index])
             self.update_quality_state()
             self.update_reading_info()
 
@@ -1717,6 +1890,8 @@ class SpreadWindow(QMainWindow):
         self.prefetch_request_timer.stop()
         self.display_warm_timer.stop()
         self.cache_maintenance_timer.stop()
+        self.page_state_save_timer.stop()
+        self.clear_queued_display_requests()
         application = QApplication.instance()
         if application is not None:
             application.removeEventFilter(self)
@@ -1725,7 +1900,7 @@ class SpreadWindow(QMainWindow):
         self.left.clear()
         self.right.clear()
         self.display_pixmap_cache.clear()
-        self.notify_page_changed()
+        self.flush_page_changed()
         if self.cleanup_dir is not None:
             shutil.rmtree(self.cleanup_dir, ignore_errors=True)
             self.cleanup_dir = None

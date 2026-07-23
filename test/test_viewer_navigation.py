@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -10,8 +11,10 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
 
+import raiv_app.viewer as viewer_module
 from raiv_app.viewer import SpreadWindow
 
 
@@ -39,6 +42,12 @@ class ViewerNavigationTests(unittest.TestCase):
         self.window.resize(1200, 800)
 
     def tearDown(self) -> None:
+        self.window.resize_quality_timer.stop()
+        self.window.display_warm_timer.stop()
+        self.window.cache_maintenance_timer.stop()
+        self.window.clear_queued_display_requests()
+        self.window.visible_display_pool.waitForDone(2000)
+        self.window.warm_display_pool.waitForDone(2000)
         self.window.close()
         self.window.deleteLater()
         self.application.processEvents()
@@ -108,6 +117,185 @@ class ViewerNavigationTests(unittest.TestCase):
 
         self.assertTrue(external_output.exists())
         self.assertIsNone(self.window.processed_pages[0])
+
+    def test_slow_image_decode_does_not_block_page_navigation(self) -> None:
+        self.window.clear_queued_display_requests()
+        self.window.visible_display_pool.waitForDone(1000)
+        self.window.warm_display_pool.waitForDone(1000)
+        self.application.processEvents()
+        self.window.display_pixmap_cache.clear()
+        self.window.resize_quality_timer.stop()
+        self.window.fast_resize_render = False
+        original_decode = viewer_module.decode_scaled_display_image
+
+        def slow_decode(*args, **kwargs):
+            time.sleep(0.25)
+            return original_decode(*args, **kwargs)
+
+        with patch("raiv_app.viewer.decode_scaled_display_image", side_effect=slow_decode):
+            started = time.perf_counter()
+            self.window.move_by(2)
+            navigation_seconds = time.perf_counter() - started
+            self.assertLess(navigation_seconds, 0.1)
+            self.window.visible_display_pool.waitForDone(2000)
+            self.application.processEvents()
+
+        self.assertIsNotNone(self.window.left.pixmap())
+        self.assertFalse(self.window.left.pixmap().isNull())
+        self.assertIsNotNone(self.window.right.pixmap())
+        self.assertFalse(self.window.right.pixmap().isNull())
+
+    def test_spread_is_revealed_only_after_both_async_images_are_ready(self) -> None:
+        self.window.clear_queued_display_requests()
+        self.window.visible_display_pool.waitForDone(1000)
+        self.window.warm_display_pool.waitForDone(1000)
+        self.application.processEvents()
+        self.window.display_pixmap_cache.clear()
+        self.window.resize_quality_timer.stop()
+        self.window.fast_resize_render = False
+        original_decode = viewer_module.decode_scaled_display_image
+        decode_count = 0
+
+        def uneven_decode(*args, **kwargs):
+            nonlocal decode_count
+            decode_count += 1
+            time.sleep(0.05 if decode_count == 1 else 0.3)
+            return original_decode(*args, **kwargs)
+
+        with patch("raiv_app.viewer.decode_scaled_display_image", side_effect=uneven_decode):
+            self.window.move_by(2)
+            self.window.display_warm_timer.stop()
+            self.window.cache_maintenance_timer.stop()
+            deadline = time.perf_counter() + 0.15
+            while time.perf_counter() < deadline:
+                self.application.processEvents()
+                time.sleep(0.01)
+            self.assertTrue(self.window.left.pixmap() is None or self.window.left.pixmap().isNull())
+            self.assertTrue(self.window.right.pixmap() is None or self.window.right.pixmap().isNull())
+            self.window.visible_display_pool.waitForDone(2000)
+            deadline = time.perf_counter() + 0.2
+            while time.perf_counter() < deadline:
+                self.application.processEvents()
+                if (
+                    self.window.left.pixmap() is not None
+                    and not self.window.left.pixmap().isNull()
+                    and self.window.right.pixmap() is not None
+                    and not self.window.right.pixmap().isNull()
+                ):
+                    break
+                time.sleep(0.01)
+
+        self.assertFalse(self.window.left.pixmap().isNull())
+        self.assertFalse(self.window.right.pixmap().isNull())
+
+    def test_original_fallback_is_visible_while_corrected_images_decode(self) -> None:
+        corrected_pages = []
+        for index, source in enumerate(self.pages):
+            corrected = self.root / f"corrected-{index:04d}.png"
+            Image.open(source).save(corrected)
+            corrected_pages.append(corrected)
+        self.window.processed_pages = corrected_pages
+        self.window.clear_queued_display_requests()
+        self.window.visible_display_pool.waitForDone(1000)
+        self.window.warm_display_pool.waitForDone(1000)
+        self.application.processEvents()
+        self.window.display_pixmap_cache.clear()
+        self.window.resize_quality_timer.stop()
+        self.window.fast_resize_render = False
+        original_decode = viewer_module.decode_scaled_display_image
+
+        def corrected_is_slow(*args, **kwargs):
+            force_grayscale = bool(args[4])
+            time.sleep(0.25 if force_grayscale else 0.01)
+            return original_decode(*args, **kwargs)
+
+        with patch("raiv_app.viewer.decode_scaled_display_image", side_effect=corrected_is_slow):
+            self.window.move_by(2)
+            self.window.display_warm_timer.stop()
+            self.window.cache_maintenance_timer.stop()
+            deadline = time.perf_counter() + 0.1
+            while time.perf_counter() < deadline:
+                self.application.processEvents()
+                time.sleep(0.005)
+
+            self.assertFalse(self.window.left.pixmap().isNull())
+            self.assertFalse(self.window.right.pixmap().isNull())
+            desired_keys = [
+                self.window.desired_display_keys[id(self.window.left)],
+                self.window.desired_display_keys[id(self.window.right)],
+            ]
+            self.assertTrue(any(key not in self.window.display_pixmap_cache for key in desired_keys))
+
+            self.window.visible_display_pool.waitForDone(2000)
+            self.application.processEvents()
+
+        self.assertTrue(all(key in self.window.display_pixmap_cache for key in desired_keys))
+        self.assertFalse(self.window.left.pixmap().isNull())
+        self.assertFalse(self.window.right.pixmap().isNull())
+
+    def test_display_cache_remains_bounded(self) -> None:
+        for index in range(self.window.display_pixmap_cache_limit + 10):
+            self.window.cache_display_pixmap(("test", index), QPixmap(20, 20))
+
+        self.assertEqual(
+            len(self.window.display_pixmap_cache),
+            self.window.display_pixmap_cache_limit,
+        )
+
+    def test_window_close_does_not_wait_for_active_decode(self) -> None:
+        self.window.clear_queued_display_requests()
+        self.window.visible_display_pool.waitForDone(1000)
+        self.application.processEvents()
+        self.window.display_pixmap_cache.clear()
+        original_decode = viewer_module.decode_scaled_display_image
+
+        def slow_decode(*args, **kwargs):
+            time.sleep(0.5)
+            return original_decode(*args, **kwargs)
+
+        with patch("raiv_app.viewer.decode_scaled_display_image", side_effect=slow_decode):
+            self.window.move_by(2)
+            started = time.perf_counter()
+            self.window.close()
+            close_seconds = time.perf_counter() - started
+
+        self.assertLess(close_seconds, 0.1)
+
+    def test_reading_position_save_is_debounced_outside_navigation(self) -> None:
+        saved_indexes: list[int] = []
+        self.window.page_changed_callback = saved_indexes.append
+
+        self.window.move_by(2)
+        self.window.move_by(2)
+
+        self.assertEqual(saved_indexes, [])
+        deadline = time.perf_counter() + 0.45
+        while time.perf_counter() < deadline:
+            self.application.processEvents()
+            time.sleep(0.01)
+        self.assertEqual(saved_indexes, [4])
+
+    def test_rapid_direction_reversals_stay_under_100ms(self) -> None:
+        self.window.clear_queued_display_requests()
+        self.window.visible_display_pool.waitForDone(1000)
+        self.window.warm_display_pool.waitForDone(1000)
+        self.window.display_pixmap_cache.clear()
+        self.window.resize_quality_timer.stop()
+        self.window.fast_resize_render = False
+        original_decode = viewer_module.decode_scaled_display_image
+        durations = []
+
+        def slow_decode(*args, **kwargs):
+            time.sleep(0.2)
+            return original_decode(*args, **kwargs)
+
+        with patch("raiv_app.viewer.decode_scaled_display_image", side_effect=slow_decode):
+            for iteration in range(40):
+                started = time.perf_counter()
+                self.window.move_by(2 if iteration % 2 == 0 else -2)
+                durations.append(time.perf_counter() - started)
+
+        self.assertLess(max(durations), 0.1)
 
 
 if __name__ == "__main__":
