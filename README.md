@@ -1,119 +1,134 @@
 # RAIV for mac
 
-RAIV for mac は、Apple Silicon Mac向けの画像・漫画ビューアです。本棚へ漫画を登録し、右綴じの見開き表示とReal-CUGANによるAI補正を使って読めます。
+[English](README.md) | [日本語](README.ja.md)
 
-[nalltama/RAIV](https://github.com/nalltama/RAIV)の思想と配布方式に敬意を払い、macOS向けに独立実装しています。本家RAIVの公式リリースではありません。
+RAIV for mac is an image and manga viewer for Apple Silicon Macs. It combines a
+visual bookshelf, two-page reading, and automatic Real-CUGAN enhancement in a
+native desktop application.
 
-## すぐに使う
+This is an independent macOS implementation inspired by
+[nalltama/RAIV](https://github.com/nalltama/RAIV). It is not an official release
+of the original RAIV project.
 
-一般ユーザーにPython、uv、ターミナル操作は不要です。
+![RAIV bookshelf with freely licensed sample comics](docs/images/bookshelf.png)
 
-1. [Releases](https://github.com/jydie5/RAIVformac/releases)を開きます。
-2. `RAIVformac-v0.2.0-alpha-macos-apple-silicon-standalone.zip`をダウンロードします。
-3. ZIPをダブルクリックして展開します。
-4. `RAIV.app`を`アプリケーション`フォルダへ移動します。
-5. 初回だけ`RAIV.app`をControlキーを押しながらクリックし、`開く`を選びます。
+![RAIV two-page reader with the settings panel open](docs/images/reader.png)
 
-詳しい画面説明と起動できない場合の対処は[INSTALL.md](INSTALL.md)にあります。
+The screenshots use *Pepper&Carrot* by David Revoy under
+[CC BY 4.0](demo/ATTRIBUTION.md). No commercial manga pages are included.
 
-> 現在のα版は署名・Apple notarization未実施です。初回の通常ダブルクリックはmacOSに止められることがあります。
+## Download
 
-## 最初の一冊を読む
+The standalone build does not require Python, uv, or Terminal.
 
-1. RAIVを起動すると本棚が開きます。
-2. ZIP、CBZ、RAR、CBR、7z、CB7、または画像フォルダを本棚へドラッグ＆ドロップします。
-3. 確認画面で`登録`を選びます。
-4. 表紙をダブルクリックすると読書画面が開きます。
-5. 左カーソルキーまたはSpaceで先へ進みます。
+1. Open [Releases](https://github.com/jydie5/RAIVformac/releases).
+2. Download the latest file whose name ends in `macos-apple-silicon-standalone.zip`.
+3. Unzip it and move `RAIV.app` to Applications.
+4. On first launch, Control-click `RAIV.app` and choose **Open**.
 
-元の圧縮ファイルは削除しません。本棚には読書用に展開したコピーを保存します。
+The current alpha is not signed or notarized. See
+[INSTALL.md](INSTALL.md) for detailed installation and troubleshooting steps.
 
-## AI補正と原画比較
+## Read your first book
 
-standalone版には、公式の`realcugan-ncnn-vulkan 20220728 macOS`実行ファイルとモデルを同梱しています。追加セットアップは不要です。
+1. Launch RAIV to open the bookshelf.
+2. Drag a ZIP, CBZ, RAR, CBR, 7z, CB7, image folder, or image onto the window.
+3. Confirm the import.
+4. Double-click the cover.
+5. Press Left Arrow or Space to advance in the default right-bound mode.
 
-- 読書中は現在の見開きと前後のページをバックグラウンドで自動補正します。
-- 読む速さに応じて前方12〜24ページ、後方4ページを循環保持します。
-- `P`キーで読書設定を開きます。
-- `原画を表示（OFFで補正版）`をONにすると原画、OFFにすると補正版です。
-- `状態: 補正済み`になる前は、切り替えても同じ原画が表示される場合があります。
-- 縦2234px以上の画像は標準設定では補正を省略します。
+RAIV keeps the source archive untouched. It stores an extracted reading copy in
+`~/RAIV Library`.
 
-補正処理はApple Silicon GPUをVulkan/Metal経由で使用します。補正を待っている間も原画で読み進められます。
+## Features
 
-## 画質モード
+- Cover-based bookshelf with multi-file drag and drop
+- ZIP/CBZ, RAR/CBR, 7z/CB7, image folders, and individual images
+- Right-bound manga layout with a single cover and two-page spreads
+- Natural title and volume ordering
+- Continue to the next volume without leaving full screen
+- Reading-position persistence
+- Full-screen reading with a translucent progress overlay
+- Automatic Real-CUGAN enhancement around the current reading position
+- Adaptive forward prefetch and a revolving backward cache
+- Non-blocking image decoding with immediate original-image fallback
+- Simple quality modes and saved manual presets
+- Instant original/enhanced comparison
+- Managed library removal without deleting the source archive
 
-通常は`かんたん`モードで次の4種類から選びます。
+See [ROADMAP.md](ROADMAP.md) for planned work and known improvement areas.
 
-| モード | 用途 |
+## AI enhancement
+
+The standalone package bundles the official
+`realcugan-ncnn-vulkan 20220728 macOS` executable and models. It uses the Apple
+Silicon GPU through Vulkan/Metal and needs no additional engine setup.
+
+RAIV automatically processes the visible spread and nearby pages in the
+background. The cache revolves as you read: normally 12-24 pages ahead and four
+pages behind are retained. Original pages remain available immediately while
+enhancement catches up.
+
+Press `P` to open Reading Settings. Enable **Show original** to view the source
+page; disable it to return to the enhanced page. Pages at or above the default
+2234-pixel height threshold are left unchanged.
+
+### Quality modes
+
+| Mode | Purpose |
 |---|---|
-| 原画 | 補正せず元画像を表示 |
-| 自然 | 線とトーンを自然に整える標準設定 |
-| クリーニング | 古いスキャンや圧縮荒れを強めに抑える |
-| 高画質 | 処理時間より仕上がりを優先 |
+| Original | Display the source image without enhancement |
+| Natural | Balance line clarity and screentone preservation |
+| Cleaning | More strongly reduce scan and compression artifacts |
+| High quality | Prioritize output quality over processing time |
 
-`マニュアル`へ切り替えると、モデル、倍率、noise、tile、TTA、補正スキップ解像度を変更できます。調整した組み合わせには名前を付けて保存し、次回起動後も呼び出せます。
+Manual mode exposes model, scale, noise, tile size, TTA, and the resolution
+threshold. Custom combinations can be named and reused.
 
-## 主な機能
+## Keyboard controls
 
-- 表紙を並べる本棚
-- 複数アーカイブのドラッグ＆ドロップ登録
-- ZIP/CBZ、RAR/CBR、7z/CB7、画像フォルダ
-- 右綴じ漫画の表紙単独・見開き表示
-- 巻順の並び替えと次巻への移動
-- 読書位置の保存
-- 全画面表示と透過進捗オーバーレイ
-- Real-CUGANの自動先読み補正
-- 読書速度に応じた適応先読み
-- 非同期画像デコードと原画フォールバックによる即時ページ送り
-- かんたん／マニュアル画質設定とカスタム設定保存
-- 原画と補正版の即時切り替え
-- 本棚からの削除と保存先表示
+These are the defaults for right-bound manga.
 
-開発中の機能、既知の改善項目、実装順は[ROADMAP.md](ROADMAP.md)で確認できます。
-
-## キーボード操作
-
-右綴じ漫画の標準設定です。
-
-| キー | 動作 |
+| Key | Action |
 |---|---|
-| `←` / `Space` | 次の見開き |
-| `→` | 前の見開き |
-| `Shift + ←` | 1ページ先へずらす |
-| `Shift + →` | 1ページ前へずらす |
-| `F` | 全画面 |
-| `P` | 読書設定の表示／非表示 |
-| `?` | ショートカット一覧 |
-| `Esc` | 全画面解除／本棚へ戻る |
+| `Left` / `Space` | Next spread |
+| `Right` | Previous spread |
+| `Shift + Left` | Shift one page forward |
+| `Shift + Right` | Shift one page backward |
+| `F` | Toggle full screen |
+| `P` | Show or hide Reading Settings |
+| `?` | Show keyboard help |
+| `Esc` | Leave full screen or return to the bookshelf |
 
-## 保存場所
+## Free demo books
 
-- 本棚データ: `~/RAIV Library`
-- AI補正キャッシュ: `~/Library/Caches/RAIV`
-- 本棚データベース: RAIVのApplication Support領域
+The [`demo`](demo) directory contains three small ZIP files that can be dropped
+directly onto the bookshelf. They contain the English low-resolution exports of
+the first three *Pepper&Carrot* episodes. Art and story are by David Revoy, and
+the files are redistributed under CC BY 4.0 with attribution included both
+beside and inside every archive.
 
-元のZIP/RARは取り込み後も元の場所に残ります。本棚から削除するとRAIVが作った展開済みコピーと読書状態を削除します。
+## Storage and removal
 
-## アンインストール
+- Managed reading copies: `~/RAIV Library`
+- AI enhancement cache: `~/Library/Caches/RAIV`
+- Database and settings: the RAIV directory in macOS Application Support
 
-1. `RAIV.app`をゴミ箱へ移動します。
-2. 本棚も不要なら`~/RAIV Library`を削除します。
-3. 補正キャッシュも不要なら`~/Library/Caches/RAIV`を削除します。
+Removing a book from the bookshelf deletes RAIV's managed reading copy and
+reading state. It never deletes the original ZIP or RAR. To uninstall the app,
+remove `RAIV.app`; remove the locations above only if you also want to erase the
+bookshelf and cache.
 
-元のZIP/RARはRAIVのアンインストールでは削除されません。
+## Current limitations
 
-## 現在の制限
+- Apple Silicon only; Intel Macs are not currently supported.
+- The application UI is currently Japanese. English UI localization is planned.
+- The alpha is unsigned and not notarized.
+- Some RAR variants may not be compatible with the available macOS extraction
+  backend.
+- Updates are manual; download a newer build from Releases.
 
-- Apple Silicon Mac専用です。
-- 署名・Apple notarization未実施です。
-- α版のためUIと設定の互換性が変わる可能性があります。
-- RAR形式によってはmacOS側の展開機能との相性で開けない場合があります。
-- 自動アップデートは未実装です。新しいZIPをReleasesから取得してください。
-
-## ソースコードから起動する
-
-この項目は開発者向けです。一般ユーザーはstandalone版を利用してください。
+## Build from source
 
 ```bash
 git clone https://github.com/jydie5/RAIVformac.git
@@ -122,19 +137,27 @@ uv sync --extra gui
 uv run raiv-viewer
 ```
 
-Python不要のローカルアプリを作る場合:
+Build a local standalone application:
 
 ```bash
 uv sync --extra app
 uv run --extra app python scripts/build_macos_app.py --bundle-engine
 ```
 
-ビルド時に公式Real-CUGAN macOS ZIPをGitHub Releasesから取得し、SHA256を検証してから同梱します。ローカルの未知のバイナリは使用しません。
+The build script downloads the official Real-CUGAN macOS archive, verifies its
+SHA-256 digest, and bundles it. Unknown local binaries are not substituted.
 
-## ライセンス
+Run the development test suite:
 
-RAIV for mac本体はMIT Licenseです。同梱するReal-CUGANと依存物の由来、バージョン、ライセンスは[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)に記載しています。standaloneアプリ内にもライセンス全文を収録します。
+```bash
+uv sync --extra dev
+uv run pytest
+```
 
-## English
+## License
 
-RAIV for mac is an independent Apple Silicon manga and image viewer inspired by [nalltama/RAIV](https://github.com/nalltama/RAIV). Download the Python-free standalone ZIP from [Releases](https://github.com/jydie5/RAIVformac/releases), unzip it, and open `RAIV.app`. The unsigned alpha may require Control-clicking the app and choosing Open on first launch. See [INSTALL.md](INSTALL.md) for detailed instructions.
+RAIV for mac is licensed under the [MIT License](LICENSE). Real-CUGAN and other
+bundled dependencies are documented in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Demo artwork has its own
+[CC BY 4.0 attribution](demo/ATTRIBUTION.md) and is not covered by the MIT
+license.

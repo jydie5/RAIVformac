@@ -26,6 +26,7 @@ dev = [
     "PySide6>=6.7",
     "numpy>=1.26",
     "opencv-python-headless>=4.9",
+    "pytest>=8",
 ]
 app = [
     "PyInstaller>=6.10",
