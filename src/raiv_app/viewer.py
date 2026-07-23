@@ -5,14 +5,21 @@ import sys
 import threading
 import time
 from argparse import ArgumentParser, Namespace
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable, Sequence
 from hashlib import sha1
+from math import ceil
 from pathlib import Path
 
 from PIL import Image, ImageOps
 from raiv_app.archive_utils import discover_samples, load_sample_pages
 from raiv_app.engine_utils import realcugan_executable, run_realcugan
+from raiv_app.quality_settings import (
+    DEFAULT_QUALITY_SETTINGS_PATH,
+    load_quality_preferences,
+    save_quality_preferences,
+    validate_quality_preset,
+)
 
 try:
     from PySide6.QtCore import QEvent, QObject, QTimer, Qt, Signal
@@ -24,11 +31,13 @@ try:
         QFileDialog,
         QFormLayout,
         QHBoxLayout,
+        QInputDialog,
         QLabel,
         QMainWindow,
         QMessageBox,
         QProgressBar,
         QPushButton,
+        QScrollArea,
         QSpinBox,
         QVBoxLayout,
         QWidget,
@@ -36,7 +45,7 @@ try:
     PYSIDE_IMPORT_ERROR: ImportError | None = None
 except ImportError as exc:
     QEvent = QObject = QTimer = Qt = Signal = QPixmap = QApplication = QCheckBox = QComboBox = QFormLayout = None
-    QHBoxLayout = QLabel = QMessageBox = QProgressBar = QPushButton = QSpinBox = QVBoxLayout = QWidget = QFileDialog = None
+    QHBoxLayout = QInputDialog = QLabel = QMessageBox = QProgressBar = QPushButton = QScrollArea = QSpinBox = QVBoxLayout = QWidget = QFileDialog = None
     QMainWindow = object
     PYSIDE_IMPORT_ERROR = exc
 
@@ -53,7 +62,9 @@ def default_upscale_dir() -> Path:
 
 DEFAULT_UPSCALE_DIR = default_upscale_dir()
 DISPLAY_CACHE_DIR = DEFAULT_UPSCALE_DIR / "display_cache"
-DEFAULT_PREVIOUS_PREFETCH_COUNT = 6
+DEFAULT_FORWARD_PREFETCH_COUNT = 12
+DEFAULT_PREVIOUS_PREFETCH_COUNT = 4
+MAX_FORWARD_PREFETCH_COUNT = 24
 MODEL_NOISE_OPTIONS = {
     "models-pro": ["3"],
     "models-se": ["-1", "0", "1", "2", "3"],
@@ -68,25 +79,37 @@ PRESETS = [
         "description": "補正せず最速で表示します。画質比較の基準です。",
     },
     {
-        "name": "標準補正",
+        "name": "自然",
         "mode": "corrected",
         "model": "models-se",
+        "scale": 2,
         "noise": "0",
+        "tile": 0,
+        "threshold": 2234,
+        "tta": False,
         "description": "se/noise 0。線とトーンを自然に整えます。",
     },
     {
-        "name": "補正強め",
+        "name": "クリーニング",
         "mode": "corrected",
         "model": "models-se",
+        "scale": 2,
         "noise": "3",
+        "tile": 0,
+        "threshold": 2234,
+        "tta": False,
         "description": "se/noise 3。古いスキャンの荒れを強く抑えます。",
     },
     {
-        "name": "軽量",
+        "name": "高画質",
         "mode": "corrected",
-        "model": "models-se",
-        "noise": "0",
-        "description": "se/noise 0。軽めの設定で先読み速度を優先します。",
+        "model": "models-pro",
+        "scale": 3,
+        "noise": "3",
+        "tile": 0,
+        "threshold": 2234,
+        "tta": False,
+        "description": "pro/noise 3。処理時間より線と質感の仕上がりを優先します。",
     },
 ]
 
@@ -174,6 +197,15 @@ def output_cache_source_key(source: Path) -> str:
     return sha1(identity.encode("utf-8")).hexdigest()[:16]
 
 
+def display_cache_path_for(display_path: Path) -> Path | None:
+    try:
+        stat = display_path.stat()
+    except OSError:
+        return None
+    key = sha1(f"{display_path}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")).hexdigest()[:16]
+    return DISPLAY_CACHE_DIR / f"{key}.png"
+
+
 def prefetch_window_indexes(
     current_index: int,
     total_pages: int,
@@ -190,6 +222,26 @@ def prefetch_window_indexes(
     return list(dict.fromkeys(indexes))
 
 
+def adaptive_forward_prefetch_count(
+    intervals_per_page: Sequence[float],
+    *,
+    base_count: int,
+    correction_seconds_per_page: float,
+    maximum_count: int = MAX_FORWARD_PREFETCH_COUNT,
+) -> int:
+    if not intervals_per_page:
+        return min(maximum_count, max(0, base_count))
+    ordered = sorted(intervals_per_page)
+    median_interval = ordered[len(ordered) // 2]
+    pages_per_second = 1.0 / max(0.05, median_interval)
+    lead_seconds = max(12.0, correction_seconds_per_page * 8.0)
+    target = ceil(pages_per_second * lead_seconds) + 4
+    target = max(base_count, min(maximum_count, target))
+    if target % 2:
+        target += 1
+    return min(maximum_count, target)
+
+
 def missing_processed_indexes(
     processed_pages: Sequence[Path | None],
     visible_indexes: Sequence[int],
@@ -199,11 +251,14 @@ def missing_processed_indexes(
     return [
         index
         for index in visible_indexes
-        if 0 <= index < len(processed_pages) and index not in skipped and processed_pages[index] is None
+        if 0 <= index < len(processed_pages)
+        and index not in skipped
+        and (processed_pages[index] is None or not processed_pages[index].is_file())
     ]
 
 
 class WorkerSignals(QObject):
+    upscale_page_done = Signal(int, object, int, object)
     upscale_done = Signal(int, object, object, int, object, bool)
 
 
@@ -218,13 +273,15 @@ class SpreadWindow(QMainWindow):
         spread_order: str = "rtl",
         cover_single: bool = True,
         auto_prefetch: bool = True,
-        prefetch_count: int = 6,
+        prefetch_count: int = DEFAULT_FORWARD_PREFETCH_COUNT,
+        previous_prefetch_count: int = DEFAULT_PREVIOUS_PREFETCH_COUNT,
         upscale_height_threshold: int = 2234,
         page_changed_callback: Callable[[int], None] | None = None,
         bookmark_callback: Callable[[int], None] | None = None,
         next_book_callback: Callable[[], None] | None = None,
         next_book_label: str | None = None,
         close_callback: Callable[["SpreadWindow"], None] | None = None,
+        settings_path: Path | None = None,
         embedded: bool = False,
         parent: QWidget | None = None,
     ) -> None:
@@ -239,6 +296,7 @@ class SpreadWindow(QMainWindow):
         self.cleanup_dir = cleanup_dir
         self.auto_prefetch_default = auto_prefetch
         self.prefetch_count_default = prefetch_count
+        self.previous_prefetch_count = previous_prefetch_count
         self.prefetch_enabled = auto_prefetch
         self.upscale_height_threshold_default = upscale_height_threshold
         self.page_changed_callback = page_changed_callback
@@ -246,6 +304,10 @@ class SpreadWindow(QMainWindow):
         self.next_book_callback = next_book_callback
         self.next_book_label = next_book_label
         self.close_callback = close_callback
+        self.settings_path = settings_path or DEFAULT_QUALITY_SETTINGS_PATH
+        self.quality_preferences = load_quality_preferences(self.settings_path)
+        self.custom_presets = list(self.quality_preferences["custom_presets"])
+        self.settings_ui_mode = self.quality_preferences["ui_mode"]
         self.embedded = embedded
         self.index = 0
         self.is_fullscreen = False
@@ -253,18 +315,26 @@ class SpreadWindow(QMainWindow):
         self.prefetch_running = False
         self.prefetch_suspended = False
         self.processing_generation = 0
-        self.current_quality_preset = "標準補正"
+        self.is_closing = False
+        self.current_quality_preset = "自然"
+        self.last_corrected_preset_name = "自然"
+        self.navigation_intervals: deque[float] = deque(maxlen=8)
+        self.last_navigation_at: float | None = None
+        self.correction_seconds_per_page = 1.25
+        self.adaptive_prefetch_count = prefetch_count
         self.controls_visible = True
         self.reading_info_visible = False
         self.image_size_cache: dict[int, tuple[int, int]] = {}
         self.display_pixmap_cache: OrderedDict[tuple[str, int, int, int, int, int], QPixmap] = OrderedDict()
-        self.display_pixmap_cache_limit = 32
+        self.display_pixmap_cache_limit = 18
+        self.last_disk_cache_prune_signature: tuple[str, tuple[int, ...]] | None = None
         self.fast_resize_render = False
         self.resize_quality_delay_ms = 180
         self.resize_quality_timer = QTimer(self)
         self.resize_quality_timer.setSingleShot(True)
         self.resize_quality_timer.timeout.connect(self.finish_resize_quality_render)
         self.signals = WorkerSignals()
+        self.signals.upscale_page_done.connect(self.on_upscale_page_done)
         self.signals.upscale_done.connect(self.on_upscale_done)
 
         direction_label = "right-bound" if self.is_right_bound() else "left-bound"
@@ -306,7 +376,7 @@ class SpreadWindow(QMainWindow):
         self.next_book_banner.setVisible(False)
         layout = QHBoxLayout()
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(0)
         self.left = QLabel(alignment=Qt.AlignCenter)
         self.right = QLabel(alignment=Qt.AlignCenter)
         self.left.setObjectName("pagePane")
@@ -361,9 +431,14 @@ class SpreadWindow(QMainWindow):
         self.render_spread()
 
     def build_controls(self) -> QWidget:
-        controls = QWidget(self)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setFixedWidth(370)
+        scroll.setStyleSheet("QScrollArea { border: 0; background: #181818; }")
+        controls = QWidget(scroll)
         controls.setObjectName("controls")
-        controls.setFixedWidth(350)
+        controls.setMinimumWidth(350)
         layout = QVBoxLayout(controls)
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(12)
@@ -379,6 +454,16 @@ class SpreadWindow(QMainWindow):
         header.addWidget(help_button)
         layout.addLayout(header)
 
+        mode_row = QHBoxLayout()
+        mode_label = QLabel("設定モード", controls)
+        mode_row.addWidget(mode_label)
+        self.settings_mode_combo = QComboBox(controls)
+        self.settings_mode_combo.addItem("かんたん", "simple")
+        self.settings_mode_combo.addItem("マニュアル", "manual")
+        self.settings_mode_combo.currentIndexChanged.connect(self.on_settings_mode_changed)
+        mode_row.addWidget(self.settings_mode_combo, 1)
+        layout.addLayout(mode_row)
+
         self.quality_state_card = QWidget(controls)
         self.quality_state_card.setStyleSheet(
             "background: #202020; border: 1px solid #3a3a3a; border-radius: 6px;"
@@ -386,7 +471,7 @@ class SpreadWindow(QMainWindow):
         state_layout = QVBoxLayout(self.quality_state_card)
         state_layout.setContentsMargins(10, 8, 10, 8)
         state_layout.setSpacing(4)
-        self.quality_mode_label = QLabel("画質: 標準補正", self.quality_state_card)
+        self.quality_mode_label = QLabel("画質: 自然", self.quality_state_card)
         self.quality_engine_label = QLabel("エンジン: Real-CUGAN / models-se", self.quality_state_card)
         self.quality_correction_label = QLabel("状態: 原画表示中", self.quality_state_card)
         self.quality_prefetch_label = QLabel("先読み: 待機中", self.quality_state_card)
@@ -414,18 +499,23 @@ class SpreadWindow(QMainWindow):
         layout.addWidget(self.next_book_hint)
         self.update_next_book_action()
 
-        preset_title = QLabel("画質モード", controls)
+        self.simple_panel = QWidget(controls)
+        simple_layout = QVBoxLayout(self.simple_panel)
+        simple_layout.setContentsMargins(0, 0, 0, 0)
+        simple_layout.setSpacing(8)
+        preset_title = QLabel("画質モード", self.simple_panel)
         preset_title.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 4px;")
-        layout.addWidget(preset_title)
+        simple_layout.addWidget(preset_title)
         for preset in PRESETS:
-            button = QPushButton(preset["name"], controls)
+            button = QPushButton(preset["name"], self.simple_panel)
             button.clicked.connect(lambda _checked=False, item=preset: self.apply_preset(item))
-            layout.addWidget(button)
-            layout.addWidget(self.help_label(preset["description"]))
-        self.preset_status = QLabel("標準補正を基準に、必要な時だけ強めや原画へ切り替えます。", controls)
+            simple_layout.addWidget(button)
+            simple_layout.addWidget(self.help_label(preset["description"]))
+        self.preset_status = QLabel("選択中: 自然", self.simple_panel)
         self.preset_status.setWordWrap(True)
         self.preset_status.setStyleSheet("color: #dddddd; font-size: 13px;")
-        layout.addWidget(self.preset_status)
+        simple_layout.addWidget(self.preset_status)
+        layout.addWidget(self.simple_panel)
 
         spread_title = QLabel("見開き", controls)
         spread_title.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 8px;")
@@ -450,14 +540,27 @@ class SpreadWindow(QMainWindow):
         layout.addWidget(self.spread_status)
         self.update_spread_status()
 
-        self.advanced_check = QCheckBox("詳細パラメータを表示", controls)
-        self.advanced_check.stateChanged.connect(self.toggle_advanced_panel)
-        layout.addWidget(self.advanced_check)
-
         self.advanced_panel = QWidget(controls)
         advanced_layout = QVBoxLayout(self.advanced_panel)
         advanced_layout.setContentsMargins(0, 0, 0, 0)
         advanced_layout.setSpacing(8)
+        custom_title = QLabel("カスタム設定", self.advanced_panel)
+        custom_title.setStyleSheet("font-weight: bold; font-size: 15px; margin-top: 4px;")
+        advanced_layout.addWidget(custom_title)
+        self.custom_preset_combo = QComboBox(self.advanced_panel)
+        self.custom_preset_combo.setToolTip("保存済みの画質設定を選びます")
+        advanced_layout.addWidget(self.custom_preset_combo)
+        custom_buttons = QHBoxLayout()
+        load_custom_button = QPushButton("読込", self.advanced_panel)
+        load_custom_button.clicked.connect(self.load_selected_custom_preset)
+        custom_buttons.addWidget(load_custom_button)
+        save_custom_button = QPushButton("保存", self.advanced_panel)
+        save_custom_button.clicked.connect(self.save_current_custom_preset)
+        custom_buttons.addWidget(save_custom_button)
+        delete_custom_button = QPushButton("削除", self.advanced_panel)
+        delete_custom_button.clicked.connect(self.delete_selected_custom_preset)
+        custom_buttons.addWidget(delete_custom_button)
+        advanced_layout.addLayout(custom_buttons)
         form = QFormLayout()
         self.scale_spin = QSpinBox(controls)
         self.scale_spin.setRange(1, 4)
@@ -493,7 +596,7 @@ class SpreadWindow(QMainWindow):
         self.model_combo.setCurrentText("models-se")
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         form.addRow("モデル", self.model_combo)
-        form.addRow("", self.help_label("seは標準・軽量寄り。proは高品質候補ですが現状は実験扱いです。"))
+        form.addRow("", self.help_label("seは自然な補正向け。proは処理時間より仕上がりを優先します。"))
 
         self.tta_check = QCheckBox("TTA", controls)
         self.tta_check.stateChanged.connect(lambda _state: self.on_processing_settings_changed())
@@ -501,7 +604,6 @@ class SpreadWindow(QMainWindow):
         form.addRow("", self.help_label("反転推論で精度を上げます。かなり遅くなります。"))
         advanced_layout.addLayout(form)
         layout.addWidget(self.advanced_panel)
-        self.advanced_panel.setVisible(False)
 
         self.apply_button = QPushButton("現在の見開きを補正", controls)
         self.apply_button.clicked.connect(self.process_current_spread)
@@ -520,30 +622,197 @@ class SpreadWindow(QMainWindow):
         layout.addWidget(self.parameter_status)
         layout.addStretch(1)
         self.on_model_changed(self.model_combo.currentText(), announce=False)
+        self.refresh_custom_preset_combo()
+        self.restore_quality_preferences()
+        self.apply_settings_mode(self.settings_ui_mode, persist=False)
         self.update_quality_state()
-        return controls
+        scroll.setWidget(controls)
+        return scroll
 
-    def toggle_advanced_panel(self) -> None:
-        self.advanced_panel.setVisible(self.advanced_check.isChecked())
+    def on_settings_mode_changed(self) -> None:
+        mode = self.settings_mode_combo.currentData()
+        self.apply_settings_mode(str(mode or "simple"), persist=True)
 
-    def apply_preset(self, preset: dict[str, str]) -> None:
-        self.scale_spin.setValue(2)
-        self.tile_spin.setValue(0)
-        self.model_combo.setCurrentText(preset["model"])
-        self.on_model_changed(preset["model"], announce=False)
-        self.noise_combo.setCurrentText(preset["noise"])
-        self.tta_check.setChecked(False)
-        if hasattr(self, "original_check"):
-            self.original_check.setChecked(preset.get("mode") == "original")
+    def apply_settings_mode(self, mode: str, *, persist: bool) -> None:
+        self.settings_ui_mode = "manual" if mode == "manual" else "simple"
+        index = self.settings_mode_combo.findData(self.settings_ui_mode)
+        if index >= 0 and self.settings_mode_combo.currentIndex() != index:
+            self.settings_mode_combo.blockSignals(True)
+            self.settings_mode_combo.setCurrentIndex(index)
+            self.settings_mode_combo.blockSignals(False)
+        is_manual = self.settings_ui_mode == "manual"
+        self.simple_panel.setVisible(not is_manual)
+        self.advanced_panel.setVisible(is_manual)
+        self.apply_button.setVisible(is_manual)
+        self.parameter_status.setVisible(is_manual)
+        self.quality_engine_label.setVisible(is_manual)
+        self.quality_prefetch_label.setVisible(is_manual)
+        if persist:
+            self.persist_quality_preferences()
+
+    def restore_quality_preferences(self) -> None:
+        selected_name = self.quality_preferences["selected_preset"]
+        preset = self.find_quality_preset(selected_name) or self.find_quality_preset("自然")
+        if preset is not None:
+            self.apply_preset(preset, render=False, persist=False, request_prefetch=False)
+
+    def find_quality_preset(self, name: str) -> dict | None:
+        return next(
+            (preset for preset in [*PRESETS, *self.custom_presets] if preset["name"] == name),
+            None,
+        )
+
+    def apply_preset(
+        self,
+        preset: dict,
+        *,
+        render: bool = True,
+        persist: bool = True,
+        request_prefetch: bool = True,
+    ) -> None:
+        is_original = preset.get("mode") == "original"
+        if not is_original:
+            self.set_engine_controls(preset)
+            self.on_processing_settings_changed()
+        self.original_check.blockSignals(True)
+        self.original_check.setChecked(is_original)
+        self.original_check.blockSignals(False)
         self.current_quality_preset = preset["name"]
-        self.preset_status.setText(preset["description"])
-        if preset.get("mode") == "original":
+        if not is_original:
+            self.last_corrected_preset_name = preset["name"]
+        self.preset_status.setText(f"選択中: {preset['name']}")
+        if is_original:
             self.parameter_status.setText("原画表示に切り替えました。補正処理は行いません。")
         else:
-            self.parameter_status.setText(f"{preset['name']}に変更しました。現在の見開きを再補正できます。")
-            self.request_prefetch()
+            self.parameter_status.setText(f"{preset['name']}に変更しました。補正はバックグラウンドで行います。")
+        if persist:
+            self.persist_quality_preferences()
         self.update_quality_state()
-        self.render_spread()
+        if render:
+            self.render_spread()
+        if request_prefetch and not is_original:
+            self.request_prefetch()
+
+    def set_engine_controls(self, preset: dict) -> None:
+        model = str(preset.get("model", "models-se"))
+        options = MODEL_NOISE_OPTIONS.get(model, ["0"])
+        controls = (
+            self.scale_spin,
+            self.noise_combo,
+            self.tile_spin,
+            self.threshold_spin,
+            self.model_combo,
+            self.tta_check,
+        )
+        for control in controls:
+            control.blockSignals(True)
+        try:
+            self.model_combo.setCurrentText(model)
+            self.noise_combo.clear()
+            self.noise_combo.addItems(options)
+            self.noise_combo.setCurrentText(str(preset.get("noise", "0")))
+            self.scale_spin.setValue(int(preset.get("scale", 2)))
+            self.tile_spin.setValue(int(preset.get("tile", 0)))
+            self.threshold_spin.setValue(int(preset.get("threshold", self.upscale_height_threshold_default)))
+            self.tta_check.setChecked(bool(preset.get("tta", False)))
+        finally:
+            for control in controls:
+                control.blockSignals(False)
+
+    def current_custom_preset(self, name: str) -> dict | None:
+        return validate_quality_preset(
+            {
+                "name": name,
+                "model": self.model_combo.currentText(),
+                "scale": self.scale_spin.value(),
+                "noise": self.noise_combo.currentText(),
+                "tile": self.tile_spin.value(),
+                "threshold": self.threshold_spin.value(),
+                "tta": self.tta_check.isChecked(),
+                "description": (
+                    f"{self.model_combo.currentText()} / {self.scale_spin.value()}倍 / "
+                    f"noise {self.noise_combo.currentText()}"
+                ),
+            }
+        )
+
+    def refresh_custom_preset_combo(self, selected_name: str | None = None) -> None:
+        self.custom_preset_combo.blockSignals(True)
+        self.custom_preset_combo.clear()
+        self.custom_preset_combo.addItem("保存済み設定を選択", None)
+        for preset in sorted(self.custom_presets, key=lambda item: item["name"].casefold()):
+            self.custom_preset_combo.addItem(preset["name"], preset["name"])
+        if selected_name:
+            index = self.custom_preset_combo.findData(selected_name)
+            if index >= 0:
+                self.custom_preset_combo.setCurrentIndex(index)
+        self.custom_preset_combo.blockSignals(False)
+
+    def load_selected_custom_preset(self) -> None:
+        name = self.custom_preset_combo.currentData()
+        preset = self.find_quality_preset(str(name)) if name else None
+        if preset is None:
+            self.parameter_status.setText("読み込むカスタム設定を選んでください。")
+            return
+        self.apply_preset(preset)
+
+    def save_current_custom_preset(self) -> None:
+        name, accepted = QInputDialog.getText(self, "カスタム設定を保存", "設定名")
+        if not accepted or not name.strip():
+            return
+        preset = self.current_custom_preset(name.strip())
+        if preset is None:
+            QMessageBox.warning(self, "保存できません", "現在のモデルとパラメータの組み合わせは保存できません。")
+            return
+        existing = next((item for item in self.custom_presets if item["name"] == preset["name"]), None)
+        if existing is not None:
+            answer = QMessageBox.question(
+                self,
+                "設定を上書き",
+                f"「{preset['name']}」を現在の値で上書きしますか？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            self.custom_presets.remove(existing)
+        self.custom_presets.append(preset)
+        self.current_quality_preset = preset["name"]
+        self.refresh_custom_preset_combo(preset["name"])
+        self.persist_quality_preferences()
+        self.parameter_status.setText(f"カスタム設定「{preset['name']}」を保存しました。")
+        self.update_quality_state()
+
+    def delete_selected_custom_preset(self) -> None:
+        name = self.custom_preset_combo.currentData()
+        preset = next((item for item in self.custom_presets if item["name"] == name), None)
+        if preset is None:
+            self.parameter_status.setText("削除するカスタム設定を選んでください。")
+            return
+        answer = QMessageBox.question(
+            self,
+            "カスタム設定を削除",
+            f"「{preset['name']}」を削除しますか？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self.custom_presets.remove(preset)
+        if self.current_quality_preset == preset["name"]:
+            self.current_quality_preset = "カスタム補正"
+        self.refresh_custom_preset_combo()
+        self.persist_quality_preferences()
+        self.parameter_status.setText(f"カスタム設定「{preset['name']}」を削除しました。")
+        self.update_quality_state()
+
+    def persist_quality_preferences(self) -> None:
+        save_quality_preferences(
+            self.settings_path,
+            ui_mode=self.settings_ui_mode,
+            selected_preset=self.current_quality_preset,
+            custom_presets=self.custom_presets,
+        )
 
     def on_original_compare_changed(self) -> None:
         visible_indexes = self.visible_page_indexes()
@@ -559,7 +828,7 @@ class SpreadWindow(QMainWindow):
             else:
                 self.parameter_status.setText("原画を表示中です。チェックを外すと補正版に戻ります。")
         elif self.current_quality_preset == "原画":
-            self.current_quality_preset = "標準補正"
+            self.current_quality_preset = self.last_corrected_preset_name
         if not self.original_check.isChecked():
             if visible_indexes and all(self.should_skip_upscale(index) for index in visible_indexes):
                 self.parameter_status.setText("この見開きは高解像度のため補正対象外です。原画を表示します。")
@@ -600,10 +869,12 @@ class SpreadWindow(QMainWindow):
         self.processing_generation += 1
         self.processed_pages = [None] * len(self.pages)
         self.display_pixmap_cache.clear()
+        self.last_disk_cache_prune_signature = None
         if bool(getattr(self, "original_check", None) and self.original_check.isChecked()):
             self.current_quality_preset = "原画"
         elif hasattr(self, "model_combo"):
             self.current_quality_preset = "カスタム補正"
+            self.last_corrected_preset_name = "カスタム補正"
         if hasattr(self, "parameter_status") and not self.upscale_running and not self.prefetch_running:
             self.parameter_status.setText("設定を変更しました。古い先読み結果は使いません。")
         if hasattr(self, "quality_mode_label"):
@@ -637,10 +908,14 @@ class SpreadWindow(QMainWindow):
         if not visible_indexes:
             return "ページなし"
         if any(self.should_skip_upscale(index) for index in visible_indexes):
+            if len(visible_indexes) > 1:
+                return "片側が高解像度のため見開き原画"
             return "高解像度のため補正スキップ"
         missing = self.visible_missing_correction_indexes(visible_indexes)
         if not missing:
             return "補正済み"
+        if self.settings_ui_mode == "simple":
+            return "原画表示中・補正準備中"
         if self.upscale_running:
             return "現在の見開きを補正中"
         if self.prefetch_running:
@@ -653,8 +928,8 @@ class SpreadWindow(QMainWindow):
         if self.prefetch_suspended:
             return "停止中 / 原画表示継続"
         if self.prefetch_running:
-            return f"生成中 / 自動{self.prefetch_count_default}ページ先"
-        return f"自動 / {self.prefetch_count_default}ページ先"
+            return f"生成中 / 自動{self.adaptive_prefetch_count}ページ先"
+        return f"自動 / {self.adaptive_prefetch_count}ページ先"
 
     def update_quality_state(self) -> None:
         if not hasattr(self, "quality_mode_label"):
@@ -664,9 +939,12 @@ class SpreadWindow(QMainWindow):
         threshold = self.threshold_spin.value() if hasattr(self, "threshold_spin") else self.upscale_height_threshold_default
         self.quality_mode_label.setText(f"画質: {self.current_quality_mode()}")
         self.quality_engine_label.setText(f"エンジン: Real-CUGAN / {model}")
-        self.quality_correction_label.setText(
-            f"状態: {self.correction_state_text()} / {scale}倍 / noise {self.current_noise_label()}"
-        )
+        if self.settings_ui_mode == "simple":
+            self.quality_correction_label.setText(f"状態: {self.correction_state_text()}")
+        else:
+            self.quality_correction_label.setText(
+                f"状態: {self.correction_state_text()} / {scale}倍 / noise {self.current_noise_label()}"
+            )
         self.quality_prefetch_label.setText(
             f"先読み: {self.prefetch_state_text()} / 縦{threshold}px以上は原画"
         )
@@ -762,11 +1040,27 @@ class SpreadWindow(QMainWindow):
             next_index = self.index + step
         self.index = max(0, min(len(self.pages) - 1, next_index))
         if self.index != previous_index:
+            self.record_navigation_speed(abs(self.index - previous_index))
             self.invalidate_prefetch_for_navigation()
         self.render_spread()
         self.notify_page_changed()
         self.update_spread_status()
         self.update_next_book_action()
+
+    def record_navigation_speed(self, pages_moved: int) -> None:
+        now = time.monotonic()
+        if self.last_navigation_at is not None and pages_moved > 0:
+            interval_per_page = (now - self.last_navigation_at) / pages_moved
+            if 0.05 <= interval_per_page <= 30:
+                self.navigation_intervals.append(interval_per_page)
+        self.last_navigation_at = now
+        if not self.navigation_intervals:
+            return
+        self.adaptive_prefetch_count = adaptive_forward_prefetch_count(
+            self.navigation_intervals,
+            base_count=self.prefetch_count_default,
+            correction_seconds_per_page=self.correction_seconds_per_page,
+        )
 
     def invalidate_prefetch_for_navigation(self) -> None:
         if not self.prefetch_running:
@@ -793,9 +1087,12 @@ class SpreadWindow(QMainWindow):
         self.is_fullscreen = not self.is_fullscreen
         fullscreen_target = self.window() if self.embedded else self
         if self.is_fullscreen:
+            self.statusBar().hide()
             fullscreen_target.showFullScreen()
         else:
             fullscreen_target.showNormal()
+            self.statusBar().show()
+        QTimer.singleShot(0, lambda: self.render_spread(high_quality=True))
 
     def toggle_controls(self) -> None:
         self.controls_visible = not self.controls_visible
@@ -826,30 +1123,29 @@ class SpreadWindow(QMainWindow):
         self.spread_status.setText(f"{direction} / 表示順 {order} / {phase}")
 
     def render_spread(self, high_quality: bool | None = None) -> None:
+        if self.is_closing:
+            return
         if not isinstance(high_quality, bool):
             high_quality = not self.fast_resize_render
         self.load_cached_outputs(self.visible_and_prefetch_indexes())
         visible_indexes = self.visible_page_indexes()
         if self.cover_single and self.index == 0:
             if self.is_right_bound():
-                self.render_label(self.left, -1, high_quality=high_quality)
-                self.render_label(self.right, 0, high_quality=high_quality)
+                left_index, right_index = -1, 0
             else:
-                self.render_label(self.left, 0, high_quality=high_quality)
-                self.render_label(self.right, -1, high_quality=high_quality)
+                left_index, right_index = 0, -1
         elif self.index + 1 >= len(self.pages):
             if self.is_right_bound():
-                self.render_label(self.left, -1, high_quality=high_quality)
-                self.render_label(self.right, self.index, high_quality=high_quality)
+                left_index, right_index = -1, self.index
             else:
-                self.render_label(self.left, self.index, high_quality=high_quality)
-                self.render_label(self.right, -1, high_quality=high_quality)
+                left_index, right_index = self.index, -1
         elif self.is_spread_reversed():
-            self.render_label(self.left, self.index + 1, high_quality=high_quality)
-            self.render_label(self.right, self.index, high_quality=high_quality)
+            left_index, right_index = self.index + 1, self.index
         else:
-            self.render_label(self.left, self.index, high_quality=high_quality)
-            self.render_label(self.right, self.index + 1, high_quality=high_quality)
+            left_index, right_index = self.index, self.index + 1
+        self.update_page_pane_alignment(left_index, right_index)
+        self.render_label(self.left, left_index, high_quality=high_quality)
+        self.render_label(self.right, right_index, high_quality=high_quality)
         page_text = page_progress_text(visible_indexes, len(self.pages))
         processed_count = sum(1 for path in self.processed_pages if path is not None)
         file_text = visible_file_names(self.pages, visible_indexes)
@@ -863,6 +1159,15 @@ class SpreadWindow(QMainWindow):
             self.prune_revolving_correction_cache()
             self.request_prefetch()
         self.update_next_book_action()
+
+    def update_page_pane_alignment(self, left_index: int, right_index: int) -> None:
+        is_pair = 0 <= left_index < len(self.pages) and 0 <= right_index < len(self.pages)
+        if is_pair:
+            self.left.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.right.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            return
+        self.left.setAlignment(Qt.AlignCenter)
+        self.right.setAlignment(Qt.AlignCenter)
 
     def render_label(self, label: QLabel, index: int, high_quality: bool = True) -> None:
         if index < 0 or index >= len(self.pages):
@@ -879,9 +1184,19 @@ class SpreadWindow(QMainWindow):
         label.setPixmap(scaled)
 
     def display_path_for_index(self, index: int) -> Path:
-        show_original = bool(getattr(self, "original_check", None) and self.original_check.isChecked())
+        visible_indexes = self.visible_page_indexes()
+        show_original = index in visible_indexes and self.visible_spread_uses_original(visible_indexes)
         display_path = self.pages[index] if show_original else self.processed_pages[index] or self.pages[index]
         return self.display_safe_path(index, display_path)
+
+    def visible_spread_uses_original(self, visible_indexes: list[int] | None = None) -> bool:
+        if bool(getattr(self, "original_check", None) and self.original_check.isChecked()):
+            return True
+        if not visible_indexes:
+            visible_indexes = self.visible_page_indexes()
+        if len(visible_indexes) > 1 and any(self.should_skip_upscale(index) for index in visible_indexes):
+            return True
+        return bool(self.visible_missing_correction_indexes(visible_indexes))
 
     def scaled_pixmap(self, display_path: Path, target, high_quality: bool = True) -> QPixmap:
         if target.width() <= 0 or target.height() <= 0:
@@ -915,7 +1230,14 @@ class SpreadWindow(QMainWindow):
     def warm_display_pixmap_cache(self, indexes: list[int]) -> None:
         if not indexes:
             return
-        targets = [self.left.size(), self.right.size()]
+        targets = []
+        seen_sizes: set[tuple[int, int]] = set()
+        for target in (self.left.size(), self.right.size()):
+            dimensions = (target.width(), target.height())
+            if dimensions in seen_sizes:
+                continue
+            seen_sizes.add(dimensions)
+            targets.append(target)
         for index in indexes:
             if index < 0 or index >= len(self.pages):
                 continue
@@ -927,9 +1249,9 @@ class SpreadWindow(QMainWindow):
         if display_path == self.pages[index]:
             return display_path
         try:
-            stat = display_path.stat()
-            key = sha1(f"{display_path}:{stat.st_size}:{stat.st_mtime_ns}".encode("utf-8")).hexdigest()[:16]
-            cached_path = DISPLAY_CACHE_DIR / f"{key}.png"
+            cached_path = display_cache_path_for(display_path)
+            if cached_path is None:
+                return display_path
             if cached_path.exists():
                 return cached_path
             DISPLAY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1025,7 +1347,8 @@ class SpreadWindow(QMainWindow):
             self.index,
             len(self.pages),
             self.visible_page_indexes(),
-            self.prefetch_count_default if self.prefetch_enabled else 0,
+            self.adaptive_prefetch_count if self.prefetch_enabled else 0,
+            self.previous_prefetch_count if self.prefetch_enabled else 0,
         )
 
     def visible_missing_correction_indexes(self, visible_indexes: list[int] | None = None) -> list[int]:
@@ -1053,6 +1376,8 @@ class SpreadWindow(QMainWindow):
     def load_cached_outputs(self, indexes: list[int]) -> None:
         if not hasattr(self, "scale_spin") or bool(getattr(self, "original_check", None) and self.original_check.isChecked()):
             return
+        if self.prefetch_running or self.upscale_running:
+            return
         for index in indexes:
             if index < 0 or index >= len(self.pages):
                 continue
@@ -1073,18 +1398,67 @@ class SpreadWindow(QMainWindow):
         return folder / f"{index + 1:04d}_{source.stem}_x{self.scale_spin.value()}.png"
 
     def prune_revolving_correction_cache(self) -> None:
-        if not hasattr(self, "scale_spin"):
+        if (
+            not hasattr(self, "scale_spin")
+            or self.prefetch_running
+            or self.upscale_running
+            or self.is_closing
+        ):
             return
         keep = set(self.visible_and_prefetch_indexes())
-        for index, processed_path in enumerate(list(self.processed_pages)):
+        signature = (self.current_parameter_key(), tuple(sorted(keep)))
+        if signature == self.last_disk_cache_prune_signature:
+            return
+
+        keep_outputs = {
+            self.current_output_path(index)
+            for index in keep
+            if 0 <= index < len(self.pages) and not self.should_skip_upscale(index)
+        }
+        for index, processed_path in enumerate(self.processed_pages):
             if index in keep:
                 continue
-            self.processed_pages[index] = None
-            output_path = self.current_output_path(index)
-            try:
-                if output_path.exists():
+            if processed_path is not None:
+                self.processed_pages[index] = None
+
+        interactive_root = DEFAULT_UPSCALE_DIR / "interactive"
+        if interactive_root.exists():
+            for output_path in interactive_root.rglob("*"):
+                if not output_path.is_file() or output_path in keep_outputs:
+                    continue
+                try:
                     output_path.unlink()
-                output_path.parent.rmdir()
+                except OSError:
+                    pass
+            self.remove_empty_cache_directories(interactive_root)
+
+        keep_display_paths = {
+            cached_path
+            for output_path in keep_outputs
+            if output_path.is_file()
+            for cached_path in [display_cache_path_for(output_path)]
+            if cached_path is not None
+        }
+        if DISPLAY_CACHE_DIR.exists():
+            for cached_path in DISPLAY_CACHE_DIR.iterdir():
+                if not cached_path.is_file() or cached_path in keep_display_paths:
+                    continue
+                try:
+                    cached_path.unlink()
+                except OSError:
+                    pass
+        self.last_disk_cache_prune_signature = signature
+
+    @staticmethod
+    def remove_empty_cache_directories(root: Path) -> None:
+        directories = sorted(
+            (path for path in root.rglob("*") if path.is_dir()),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        )
+        for directory in directories:
+            try:
+                directory.rmdir()
             except OSError:
                 pass
 
@@ -1133,7 +1507,7 @@ class SpreadWindow(QMainWindow):
         ).start()
 
     def request_prefetch(self) -> None:
-        if self.prefetch_suspended:
+        if self.prefetch_suspended or self.is_closing:
             return
         if not self.prefetch_enabled:
             if hasattr(self, "quality_mode_label"):
@@ -1152,6 +1526,8 @@ class SpreadWindow(QMainWindow):
         QTimer.singleShot(0, self.start_prefetch)
 
     def start_prefetch(self) -> None:
+        if self.is_closing:
+            return
         if self.prefetch_running or self.upscale_running or not self.prefetch_enabled:
             return
         if self.prefetch_suspended:
@@ -1204,8 +1580,9 @@ class SpreadWindow(QMainWindow):
     ) -> None:
         started = time.perf_counter()
         errors: list[str] = []
+        completed_output_paths: dict[int, Path] = {}
         for index in output_paths:
-            if is_prefetch and generation != self.processing_generation:
+            if generation != self.processing_generation or self.is_closing:
                 break
             try:
                 result = run_realcugan(
@@ -1219,16 +1596,47 @@ class SpreadWindow(QMainWindow):
                 )
                 if result.returncode != 0 or not result.output_exists:
                     errors.append(f"{self.pages[index].name}: code {result.returncode}")
+                else:
+                    completed_output_paths[index] = output_paths[index]
+                    self.signals.upscale_page_done.emit(
+                        index,
+                        output_paths[index],
+                        generation,
+                        parameter_key,
+                    )
             except Exception as exc:
                 errors.append(f"{self.pages[index].name}: {exc}")
         self.signals.upscale_done.emit(
             round((time.perf_counter() - started) * 1000),
-            output_paths,
+            completed_output_paths,
             errors,
             generation,
             parameter_key,
             is_prefetch,
         )
+
+    def on_upscale_page_done(
+        self,
+        index: int,
+        output_path: Path,
+        generation: int,
+        parameter_key: str,
+    ) -> None:
+        if (
+            self.is_closing
+            or generation != self.processing_generation
+            or parameter_key != self.current_parameter_key()
+        ):
+            return
+        if not output_path.is_file():
+            return
+        self.processed_pages[index] = output_path
+        visible_indexes = self.visible_page_indexes()
+        if index in visible_indexes and not self.visible_missing_correction_indexes(visible_indexes):
+            self.render_spread(high_quality=True)
+        else:
+            self.update_quality_state()
+            self.update_reading_info()
 
     def on_upscale_done(
         self,
@@ -1239,12 +1647,20 @@ class SpreadWindow(QMainWindow):
         parameter_key: str,
         is_prefetch: bool,
     ) -> None:
+        if self.is_closing:
+            return
         stale = generation != self.processing_generation or parameter_key != self.current_parameter_key()
+        if output_paths:
+            measured_seconds = (elapsed_ms / 1000) / len(output_paths)
+            self.correction_seconds_per_page = (
+                self.correction_seconds_per_page * 0.7 + measured_seconds * 0.3
+            )
         for index, output_path in output_paths.items():
             if not stale and output_path.exists():
                 self.processed_pages[index] = output_path
         self.upscale_running = False
         self.prefetch_running = False
+        self.last_disk_cache_prune_signature = None
         self.apply_button.setEnabled(True)
         if stale:
             self.parameter_status.setText("古い先読み結果を破棄しました。")
@@ -1268,6 +1684,21 @@ class SpreadWindow(QMainWindow):
         self.render_spread()
 
     def closeEvent(self, event) -> None:
+        if self.is_closing:
+            super().closeEvent(event)
+            return
+        self.is_closing = True
+        self.prefetch_suspended = True
+        self.processing_generation += 1
+        self.resize_quality_timer.stop()
+        application = QApplication.instance()
+        if application is not None:
+            application.removeEventFilter(self)
+        self.left.removeEventFilter(self)
+        self.right.removeEventFilter(self)
+        self.left.clear()
+        self.right.clear()
+        self.display_pixmap_cache.clear()
         self.notify_page_changed()
         if self.cleanup_dir is not None:
             shutil.rmtree(self.cleanup_dir, ignore_errors=True)
@@ -1286,7 +1717,18 @@ def parse_args(argv: list[str]) -> Namespace:
     parser.add_argument("--use-processed", action="store_true", help="auto-load processed benchmark images when available")
     parser.add_argument("--no-auto-prefetch", action="store_true", help="disable interactive correction prefetch")
     parser.add_argument("--no-cover-single", action="store_true", help="start with a normal two-page spread instead of a single cover")
-    parser.add_argument("--prefetch", type=int, default=6, help="number of pages to correct ahead")
+    parser.add_argument(
+        "--prefetch",
+        type=int,
+        default=DEFAULT_FORWARD_PREFETCH_COUNT,
+        help="number of pages to correct ahead",
+    )
+    parser.add_argument(
+        "--previous-prefetch",
+        type=int,
+        default=DEFAULT_PREVIOUS_PREFETCH_COUNT,
+        help="number of previous pages to retain",
+    )
     parser.add_argument("--skip-height", type=int, default=2234, help="skip correction when source height is this value or higher")
     parser.add_argument(
         "--direction",
@@ -1389,6 +1831,7 @@ def main() -> None:
         cover_single=not args.no_cover_single,
         auto_prefetch=not args.no_auto_prefetch,
         prefetch_count=args.prefetch,
+        previous_prefetch_count=args.previous_prefetch,
         upscale_height_threshold=args.skip_height,
     )
     window.show()
