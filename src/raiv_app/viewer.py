@@ -136,8 +136,8 @@ NOISE_LABELS = {
 
 def navigation_help_text(reading_direction: str) -> str:
     if reading_direction == "rtl":
-        return "Left/Space: next | Right: previous | Shift+Left/Right: +/-1p | F: fullscreen | P: panel | ?: help"
-    return "Right/Space: next | Left: previous | Shift+Right/Left: +/-1p | F: fullscreen | P: panel | ?: help"
+        return "Left/Space: next | Right: previous | Shift+Left/Right: +/-1p | F: fullscreen | P: panel | H: help"
+    return "Right/Space: next | Left: previous | Shift+Right/Left: +/-1p | F: fullscreen | P: panel | H: help"
 
 
 def viewer_shortcuts_text(reading_direction: str) -> str:
@@ -162,7 +162,7 @@ def viewer_shortcuts_text(reading_direction: str) -> str:
             tr("B: しおり追加"),
             tr("画像クリック: ページ情報を表示/非表示"),
             tr("Esc: 全画面解除 / 本棚へ戻る"),
-            tr("?: このヘルプを表示"),
+            tr("H / ?: このヘルプを表示"),
         ]
     )
 
@@ -192,8 +192,8 @@ def show_help_dialog(parent, shortcuts_text: str) -> None:
 
 def compact_shortcuts_text(reading_direction: str) -> str:
     if reading_direction == "rtl":
-        return tr("← 次 / → 前 / Shift+← 1p進む / Shift+→ 1p戻す / P 設定 / ? ヘルプ")
-    return tr("→ 次 / ← 前 / Shift+→ 1p進む / Shift+← 1p戻す / P 設定 / ? ヘルプ")
+        return tr("← 次 / → 前 / Shift+← 1p進む / Shift+→ 1p戻す / P 設定 / H ヘルプ")
+    return tr("→ 次 / ← 前 / Shift+→ 1p進む / Shift+← 1p戻す / P 設定 / H ヘルプ")
 
 
 def display_preset_name(name: str) -> str:
@@ -1206,7 +1206,7 @@ class SpreadWindow(QMainWindow):
         elif key == Qt.Key_B:
             self.add_bookmark()
             return True
-        elif key == Qt.Key_Question:
+        elif key in {Qt.Key_H, Qt.Key_Question}:
             self.show_shortcuts_help()
             return True
         elif key == Qt.Key_Escape:

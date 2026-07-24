@@ -194,7 +194,7 @@ def bookshelf_shortcuts_text() -> str:
             "Delete: 選択中の本を本棚から削除。元ZIP/RARは残す",
             "本棚から削除: 確認後、RAIV管理フォルダを削除。元ZIP/RARは残す",
             "保存先を開く: FinderでRAIV Libraryを表示",
-            "?: このヘルプを表示",
+            "H / ?: このヘルプを表示",
         ]
     )
 
@@ -389,7 +389,7 @@ class BookshelfWindow(QMainWindow):
         self.accept_drop_event(event)
 
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key_Question:
+        if event.key() in {Qt.Key_H, Qt.Key_Question}:
             self.show_shortcuts_help()
             return
         if event.key() in {Qt.Key_Delete, Qt.Key_Backspace} and self.stack.currentWidget() is self.bookshelf_page:

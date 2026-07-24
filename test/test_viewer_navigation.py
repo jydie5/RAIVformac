@@ -11,6 +11,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication
 
@@ -63,6 +64,13 @@ class ViewerNavigationTests(unittest.TestCase):
 
         self.assertEqual(self.window.processing_generation, generation)
         self.assertIn(0, self.window.prefetch_target_indexes)
+
+    def test_h_opens_help_without_shift(self) -> None:
+        with patch.object(self.window, "show_shortcuts_help") as show_help:
+            handled = self.window.handle_navigation_key(Qt.Key_H)
+
+        self.assertTrue(handled)
+        show_help.assert_called_once_with()
 
     def test_prefetch_worker_skips_pages_outside_latest_target(self) -> None:
         output_paths = {

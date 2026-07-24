@@ -109,7 +109,7 @@ These are the defaults for right-bound manga.
 | `Shift + Right` | Shift one page backward |
 | `F` | Toggle full screen |
 | `P` | Show or hide Reading Settings |
-| `?` | Show keyboard help |
+| `H` / `?` | Show keyboard help and project links |
 | `Esc` | Leave full screen or return to the bookshelf |
 
 ## Free demo books
