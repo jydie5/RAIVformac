@@ -17,7 +17,7 @@ from raiv_app.i18n import (
     tr,
 )
 from raiv_app.library import LibraryPaths, LibraryService, save_library_settings
-from raiv_app.viewer import SpreadWindow, viewer_shortcuts_text
+from raiv_app.viewer import SpreadWindow, help_dialog_html, viewer_shortcuts_text
 
 
 JAPANESE_TEXT = re.compile(r"[ぁ-んァ-ン一-龯]")
@@ -54,6 +54,20 @@ def test_basic_translation_switches_languages() -> None:
     assert tr("本棚から削除") == "Remove"
     set_language("ja")
     assert tr("本棚から削除") == "本棚から削除"
+
+
+def test_help_dialog_contains_localized_project_links() -> None:
+    set_language("en")
+    english = help_dialog_html("?: show help")
+    assert "Project links" in english
+    assert "https://github.com/jydie5/RAIVformac" in english
+    assert "https://buymeacoffee.com/jydie5" in english
+
+    set_language("ja")
+    japanese = help_dialog_html("?: ヘルプ")
+    assert "プロジェクト情報" in japanese
+    assert "開発を支援（任意）" in japanese
+    set_language("en")
 
 
 def test_bookshelf_and_reader_have_no_visible_japanese_in_english_mode(tmp_path: Path) -> None:

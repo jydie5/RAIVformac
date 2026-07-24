@@ -29,6 +29,7 @@ from raiv_app.viewer import (
     SpreadWindow,
     collect_processed_pages,
     default_spread_order,
+    show_help_dialog,
 )
 
 if PYSIDE_IMPORT_ERROR is None:
@@ -397,7 +398,7 @@ class BookshelfWindow(QMainWindow):
         super().keyPressEvent(event)
 
     def show_shortcuts_help(self) -> None:
-        QMessageBox.information(self, tr("ショートカット"), bookshelf_shortcuts_text())
+        show_help_dialog(self, bookshelf_shortcuts_text())
 
     def handle_drop_event(self, event) -> bool:
         if event.type() in {QEvent.DragEnter, QEvent.DragMove}:

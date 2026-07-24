@@ -8,6 +8,7 @@ from argparse import ArgumentParser, Namespace
 from collections import OrderedDict, deque
 from collections.abc import Callable, Sequence
 from hashlib import sha1
+from html import escape
 from math import ceil
 from pathlib import Path
 
@@ -54,6 +55,8 @@ except ImportError as exc:
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 SAMPLE_DIR = ROOT_DIR / "sample"
+PROJECT_URL = "https://github.com/jydie5/RAIVformac"
+SUPPORT_URL = "https://buymeacoffee.com/jydie5"
 
 
 def default_upscale_dir() -> Path:
@@ -162,6 +165,29 @@ def viewer_shortcuts_text(reading_direction: str) -> str:
             tr("?: このヘルプを表示"),
         ]
     )
+
+
+def help_dialog_html(shortcuts_text: str) -> str:
+    shortcuts = "<br>".join(escape(line) for line in shortcuts_text.splitlines())
+    return (
+        f"<p>{shortcuts}</p>"
+        f"<hr><p><b>{escape(tr('プロジェクト情報'))}</b><br>"
+        f"<a href=\"{PROJECT_URL}\">{escape(tr('ソースコード・不具合報告'))}</a><br>"
+        f"<a href=\"{SUPPORT_URL}\">{escape(tr('開発を支援（任意）'))}</a></p>"
+    )
+
+
+def show_help_dialog(parent, shortcuts_text: str) -> None:
+    message = QMessageBox(parent)
+    message.setWindowTitle(tr("ショートカット"))
+    message.setIcon(QMessageBox.Information)
+    message.setTextFormat(Qt.RichText)
+    message.setTextInteractionFlags(Qt.TextBrowserInteraction)
+    message.setText(help_dialog_html(shortcuts_text))
+    message.setStandardButtons(QMessageBox.Ok)
+    for label in message.findChildren(QLabel):
+        label.setOpenExternalLinks(True)
+    message.exec()
 
 
 def compact_shortcuts_text(reading_direction: str) -> str:
@@ -1244,11 +1270,7 @@ class SpreadWindow(QMainWindow):
             self.statusBar().showMessage(f"Bookmark added at p.{self.index + 1}    {self.help_text()}")
 
     def show_shortcuts_help(self) -> None:
-        QMessageBox.information(
-            self,
-            tr("ショートカット"),
-            viewer_shortcuts_text(self.reading_direction),
-        )
+        show_help_dialog(self, viewer_shortcuts_text(self.reading_direction))
         self.activateWindow()
         self.setFocus(Qt.ActiveWindowFocusReason)
 

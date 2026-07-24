@@ -166,8 +166,10 @@ uv run pytest
 
 RAIV for mac remains free software under the MIT License whether or not you
 support its development. Stars, bug reports, testing, and code contributions are
-valuable. Optional donations are also compatible with the project licenses, but
-no official payment account is configured yet. Trust only funding links
+valuable. If RAIV is useful to you, you can optionally
+[support continued development on Buy Me a Coffee](https://buymeacoffee.com/jydie5).
+Support helps cover AI/API usage, testing, and ongoing development; it does not
+unlock features or change the software license. Trust only funding links
 published in this repository.
 
 ## License
