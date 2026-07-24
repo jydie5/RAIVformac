@@ -2,6 +2,10 @@
 
 [English](README.md) | [日本語](README.ja.md)
 
+<p align="center">
+  <img src="assets/raiv-app-icon.png" width="160" alt="RAIV for mac app icon">
+</p>
+
 RAIV for mac is a free, open-source macOS comic reader and image viewer for
 Apple Silicon. It reads CBZ, CBR, ZIP, RAR, 7z, image folders, and individual
 images, combining a visual bookshelf, two-page manga reading, and automatic
@@ -109,6 +113,7 @@ These are the defaults for right-bound manga.
 | `Shift + Right` | Shift one page backward |
 | `F` | Toggle full screen |
 | `P` | Show or hide Reading Settings |
+| `O` | Toggle Original / Enhanced |
 | `H` / `?` | Show keyboard help and project links |
 | `Esc` | Leave full screen or return to the bookshelf |
 

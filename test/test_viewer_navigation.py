@@ -72,6 +72,15 @@ class ViewerNavigationTests(unittest.TestCase):
         self.assertTrue(handled)
         show_help.assert_called_once_with()
 
+    def test_o_toggles_original_and_enhanced_display(self) -> None:
+        self.assertFalse(self.window.original_check.isChecked())
+
+        self.assertTrue(self.window.handle_navigation_key(Qt.Key_O))
+        self.assertTrue(self.window.original_check.isChecked())
+
+        self.assertTrue(self.window.handle_navigation_key(Qt.Key_O))
+        self.assertFalse(self.window.original_check.isChecked())
+
     def test_prefetch_worker_skips_pages_outside_latest_target(self) -> None:
         output_paths = {
             index: self.root / "outputs" / f"{index:04d}.png"
