@@ -4,12 +4,18 @@
 
 ## 対応環境
 
-- Apple Silicon搭載Mac（M1、M2、M3、M4以降）
+- Apple Silicon搭載Mac（M1、M2、M3、M4、A18 Pro搭載MacBook Neo）
 - macOS 13以降を推奨
 - アプリ本体とAIエンジン用に約300MB
 - 漫画を展開するため、元アーカイブと同程度以上の空き容量
 
 Intel Macは現在のstandalone版の対象外です。
+
+MacBook Neoについては、RAIV本体と同梱Real-CUGANエンジンがともに
+`arm64`ネイティブで、エンジンがMetalを利用するため、構成上は動作する
+見込みです。ただし実機では未検証です。8GBユニファイドメモリと小規模な
+GPUのため、MシリーズのPro搭載MacよりAI先読みが遅くなる可能性があります。
+詳細は[ハードウェア互換性](docs/hardware-compatibility.md)を参照してください。
 
 ## ダウンロード
 

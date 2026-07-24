@@ -15,6 +15,8 @@ from fetch_realcugan import ensure_realcugan, fetch_license_files, write_provena
 ROOT_DIR = Path(__file__).resolve().parents[1]
 ENTRYPOINT = ROOT_DIR / "src" / "raiv_app" / "main.py"
 DIST_APP = ROOT_DIR / "dist" / "RAIV.app"
+APP_ICON_SOURCE = ROOT_DIR / "assets" / "raiv-app-icon.png"
+APP_ICON = ROOT_DIR / "build" / "RAIV.icns"
 BUNDLE_IDENTIFIER = "jp.raiv.viewer"
 APP_VERSION = "0.3.0"
 LICENSES_DIR = ROOT_DIR / "build" / "licenses"
@@ -35,6 +37,45 @@ RUNTIME_DISTRIBUTIONS = (
     "texttable",
     "rarfile",
 )
+
+ICONSET_FILES = {
+    "icon_16x16.png": 16,
+    "icon_16x16@2x.png": 32,
+    "icon_32x32.png": 32,
+    "icon_32x32@2x.png": 64,
+    "icon_128x128.png": 128,
+    "icon_128x128@2x.png": 256,
+    "icon_256x256.png": 256,
+    "icon_256x256@2x.png": 512,
+    "icon_512x512.png": 512,
+    "icon_512x512@2x.png": 1024,
+}
+
+
+def build_app_icon() -> Path:
+    if not APP_ICON_SOURCE.is_file():
+        raise RuntimeError(f"app icon source was not found: {APP_ICON_SOURCE}")
+    iconset_dir = ROOT_DIR / "build" / "RAIV.iconset"
+    iconset_dir.mkdir(parents=True, exist_ok=True)
+    for filename, size in ICONSET_FILES.items():
+        subprocess.run(
+            [
+                "sips",
+                "-z",
+                str(size),
+                str(size),
+                str(APP_ICON_SOURCE),
+                "--out",
+                str(iconset_dir / filename),
+            ],
+            check=True,
+            capture_output=True,
+        )
+    subprocess.run(
+        ["iconutil", "-c", "icns", str(iconset_dir), "-o", str(APP_ICON)],
+        check=True,
+    )
+    return APP_ICON
 
 
 def copy_runtime_license_files(destination: Path) -> int:
@@ -147,6 +188,7 @@ def main() -> None:
         raise SystemExit(f"missing entrypoint: {ENTRYPOINT}")
     shutil.rmtree(ROOT_DIR / "build", ignore_errors=True)
     shutil.rmtree(DIST_APP, ignore_errors=True)
+    app_icon = build_app_icon()
     engine_dir = ensure_realcugan(ROOT_DIR / "build" / "vendor") if args.bundle_engine else None
     command = [
         sys.executable,
@@ -154,6 +196,8 @@ def main() -> None:
         "PyInstaller",
         "--noconfirm",
         "--windowed",
+        "--icon",
+        str(app_icon),
         "--name",
         "RAIV",
         "--osx-bundle-identifier",

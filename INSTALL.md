@@ -4,12 +4,18 @@
 
 ## Requirements
 
-- An Apple Silicon Mac (M1, M2, M3, M4, or newer)
+- An Apple Silicon Mac (M1, M2, M3, M4, or A18 Pro MacBook Neo)
 - macOS 13 or newer is recommended
 - About 300 MB for the application and bundled AI engine
 - Additional space for extracted reading copies
 
 Intel Macs are not supported by the current standalone build.
+
+The A18 Pro MacBook Neo is expected to be compatible because both RAIV and its
+bundled Real-CUGAN engine are native `arm64` executables and the engine uses
+Metal. It has not yet been tested on physical MacBook Neo hardware. Its 8 GB of
+unified memory and smaller GPU may reduce AI prefetch throughput compared with
+M-series Pro Macs. See [Hardware compatibility](docs/hardware-compatibility.md).
 
 ## Download
 
